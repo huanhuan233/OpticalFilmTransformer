@@ -28,3 +28,6 @@ optogpt_data/train/
 .vscode/
 .idea/
 optogpt/optogpt_data/train/data_train_0.csv
+
+# Large training data
+optogpt/optogpt_data/train/
