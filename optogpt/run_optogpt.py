@@ -19,12 +19,12 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--seeds', default=42, type=int, help='random seeds')
-    parser.add_argument('--epochs', default=1000, type=int, help='Num of training epoches')
-    parser.add_argument('--ratios', default=100, type=int, help='Ratio of training dataset')
-    parser.add_argument('--batch_size', default=1000, type=int, help='Batch size')
+    parser.add_argument('--epochs', default=2, type=int, help='Num of training epoches')
+    parser.add_argument('--ratios', default=2, type=int, help='Ratio of training dataset')
+    parser.add_argument('--batch_size', default=8, type=int, help='Batch size')
     parser.add_argument('--dropout', default=0.1, type=float, help='dropout rate')
     parser.add_argument('--max_lr', default=1.0, type=float, help='maximum learning rate')
-    parser.add_argument('--warm_steps', default=100000, type=int, help='learning rate warmup steps')
+    parser.add_argument('--warm_steps', default=100, type=int, help='learning rate warmup steps')
 
     parser.add_argument('--smoothing', default=0.1, type=float, help='Smoothing for KL divergence')
 
@@ -33,8 +33,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--layers', default=1, type=int, help='Encoder layers')
     parser.add_argument('--head_num', default=8, type=int, help='Attention head numbers')
-    parser.add_argument('--d_model', default=1024, type=int, help='Total attention dim = head_num * head_dim')
-    parser.add_argument('--d_ff', default=512, type=int, help='Feed forward layer dim')
+    parser.add_argument('--d_model', default=128, type=int, help='Total attention dim = head_num * head_dim')
+    parser.add_argument('--d_ff', default=128, type=int, help='Feed forward layer dim')
     parser.add_argument('--max_len', default=22, type=int, help='Transformer horizons')
 
     parser.add_argument('--save_folder', default='test', type=str, help='First order folder')

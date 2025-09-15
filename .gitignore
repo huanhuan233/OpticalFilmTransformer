@@ -1,0 +1,30 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pkl
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environments
+env/
+venv/
+.venv/
+optogpt_env/
+
+# Large data / models
+data/
+*.pt
+*.pth
+*.npy
+*.npz
+nk/
+optogpt_data/train/
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
