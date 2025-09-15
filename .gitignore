@@ -27,4 +27,4 @@ optogpt_data/train/
 .DS_Store
 .vscode/
 .idea/
-
+optogpt/optogpt_data/train/data_train_0.csv
