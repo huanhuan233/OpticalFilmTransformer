@@ -13,15 +13,32 @@ env/
 venv/
 .venv/
 optogpt_env/
+.env
+.env.local
+.env.*.local
 
 # Large data / models
 data/
+dataset/
+saved_models/
 *.pt
 *.pth
 *.npy
 *.npz
 nk/
 optogpt_data/train/
+optogpt/optogpt_data/
+
+# Database files
+*.sqlite3
+*.db
+*.sqlite
+
+# Archives
+*.tar.gz
+*.zip
+*.tar
+*.gz
 
 # OS / Editor
 .DS_Store
@@ -29,5 +46,6 @@ optogpt_data/train/
 .idea/
 optogpt/optogpt_data/train/data_train_0.csv
 
-# Large training data
-optogpt/optogpt_data/train/
+# Node modules
+node_modules/
+optogpt/frontend/node_modules/
