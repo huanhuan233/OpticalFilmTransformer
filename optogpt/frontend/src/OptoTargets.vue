@@ -1106,7 +1106,7 @@ interface OptimizationResult {
 }
 
 // 优化采样结果的结构（带超时，只返回结果，不更新状态）
-async function optimizeSampleStructure(sampleIdx: number, structure: string[], timeoutMs: number = 60000): Promise<OptimizationResult> {
+async function optimizeSampleStructure(sampleIdx: number, structure: string[], timeoutMs: number = 120000): Promise<OptimizationResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
   
@@ -1490,13 +1490,13 @@ watch(enableOptimization, async (newVal) => {
     
     // 优化结果队列
     const optimizationQueue: OptimizationResult[] = []
-    const concurrency = 3 // 同时优化3个，避免后端过载
+    const concurrency = 1 // 串行执行，避免后端过载和超时（复杂结构需要更多时间）
     
     // 分批执行优化，存储结果到队列
     for (let i = 0; i < tasks.length; i += concurrency) {
       const batch = tasks.slice(i, i + concurrency)
       const batchPromises = batch.map(({ index, structure }) => 
-        optimizeSampleStructure(index, structure, 60000)
+        optimizeSampleStructure(index, structure, 120000)
           .then((result) => {
             optimizationQueue.push(result)
             optimizationProgress.value = { 

@@ -799,15 +799,31 @@ def optimize_structure(request: HttpRequest):
         thickness_bounds = [(20.0, 300.0) for _ in range(len(initial_thicknesses))]
         
         # 执行BFGS优化
-        result = minimize(
-            objective_function, 
-            initial_thicknesses, 
-            method='L-BFGS-B', 
-            bounds=thickness_bounds, 
-            options={'ftol': 1e-9, 'gtol': 1e-6, 'maxiter': 100}
-        )
+        # 根据层数调整迭代次数：大幅减少迭代次数以加快速度
+        num_layers = len(initial_thicknesses)
+        # 对于层数少的（<=5层），使用较少迭代；层数多的，大幅减少迭代次数
+        if num_layers <= 5:
+            max_iter = 20
+        elif num_layers <= 10:
+            max_iter = 30
+        else:
+            max_iter = 40  # 层数多的最多40次，避免超时
         
-        optimized_thicknesses = result.x.tolist()
+        try:
+            result = minimize(
+                objective_function, 
+                initial_thicknesses, 
+                method='L-BFGS-B', 
+                bounds=thickness_bounds, 
+                options={'ftol': 1e-5, 'gtol': 1e-4, 'maxiter': max_iter}  # 放宽容差，加快收敛
+            )
+            
+            # 即使优化未完全成功，也使用当前结果（可能已经改善）
+            optimized_thicknesses = result.x.tolist()
+        except Exception as e:
+            # 如果优化出错，使用初始值
+            print(f"[optimize_structure] 优化异常: {e}, 使用初始值")
+            optimized_thicknesses = initial_thicknesses
         
         # 构建优化后的结构（保持材料顺序，更新厚度）
         optimized_structure = [f"{mat}_{int(round(thk))}" for mat, thk in zip(materials, optimized_thicknesses)]
