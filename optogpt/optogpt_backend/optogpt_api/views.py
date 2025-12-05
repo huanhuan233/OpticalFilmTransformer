@@ -568,8 +568,18 @@ def infer(request: HttpRequest):
         if not directives_text:
             lines = []
             for r in rows_in:
-                ch = str(r.get('ch', 'R')).upper()
-                lam = float(r.get('lam', 550))
+                # 处理 ch 字段：可能是字符串 'R'/'T'，也可能是对象 {'value': 'R', 'text': 'R'}
+                ch_raw = r.get('ch', 'R')
+                if isinstance(ch_raw, dict):
+                    ch = str(ch_raw.get('value', ch_raw.get('text', 'R'))).upper()
+                else:
+                    ch = str(ch_raw).upper()
+                # 处理 lam 字段：可能是数字，也可能是对象 {'value': 550, 'text': '550'}
+                lam_raw = r.get('lam', 550)
+                if isinstance(lam_raw, dict):
+                    lam = float(lam_raw.get('value', lam_raw.get('text', 550)))
+                else:
+                    lam = float(lam_raw)
                 # 前端可能字段叫 val，也可能叫 v
                 v = r.get('v', r.get('val', 0.0))
                 try:

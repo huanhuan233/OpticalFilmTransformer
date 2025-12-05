@@ -39,7 +39,7 @@
                 <tbody>
                   <tr v-for="(row, idx) in rows" :key="row.id">
                     <td>
-                      <va-select dense :options="channelOptions" v-model="row.ch" placeholder="R/T" />
+                      <va-select dense :options="channelOptions" v-model="row.ch" placeholder="R/T" value-by="value" text-by="text" />
                     </td>
                     <td>
                       <va-select dense :options="lambdaOptions" v-model="row.lam" placeholder="波长" searchable />
@@ -471,7 +471,11 @@ function rowsToDirectives (): string {
     v = Math.max(0, Math.min(1, v))
 
     const w = Math.max(0, Number(r.w) || 0)
-    lines.push(`${r.ch},${r.lam},${v},${w}`)
+    // 处理 ch 字段：可能是字符串，也可能是对象（防御性处理）
+    let ch: string = typeof r.ch === 'string' ? r.ch : (r.ch?.value || r.ch?.text || 'R')
+    // 处理 lam 字段：可能是数字，也可能是对象（防御性处理）
+    let lam: number = typeof r.lam === 'number' ? r.lam : (r.lam?.value || r.lam?.text || 550)
+    lines.push(`${ch},${lam},${v},${w}`)
   }
   // 关键：逐行换行（并加一个结尾换行，防止最后一行也被黏连）
   return lines.join('\n') + '\n'
