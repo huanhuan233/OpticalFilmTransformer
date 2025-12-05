@@ -828,6 +828,35 @@ def optimize_structure(request: HttpRequest):
         L = len(wavelengths_nm)
         R_values = opt_result[:L]
         T_values = opt_result[L:]
+        
+        # 计算TF分数（如果提供了目标值和参数）
+        tf_score = None
+        if target_R and len(target_R) == L and target_T and len(target_T) == L:
+            try:
+                # 获取TFCalc参数（从请求中获取，或使用默认值）
+                tf_params = body.get('tf_params', {})
+                N_vec = tf_params.get('N_vec', [1.0] * (L * 2))
+                Tol_vec = tf_params.get('Tol_vec', [0.05] * (L * 2))
+                I_vec = tf_params.get('I_vec', [1.0] * (L * 2))
+                D_vec = tf_params.get('D_vec', [1.0] * (L * 2))
+                k = tf_params.get('k', 2)
+                
+                # 构建spec向量
+                vec_sim = np.concatenate([R_values, T_values])
+                vec_target = np.concatenate([np.array(target_R, dtype=float), np.array(target_T, dtype=float)])
+                
+                # 计算TF分数
+                tf_score = float(tfcalc_merit(
+                    C_vec=vec_sim,
+                    T_vec=vec_target,
+                    N_vec=N_vec,
+                    Tol_vec=Tol_vec,
+                    I=I_vec,
+                    D=D_vec,
+                    k=k
+                ))
+            except Exception as e:
+                print(f"[optimize_structure] 计算TF分数失败: {e}")
 
         return JsonResponse({
             'ok': True,
@@ -840,7 +869,8 @@ def optimize_structure(request: HttpRequest):
             'optimized_structure': optimized_structure,
             'optimization_success': result.success,
             'optimization_iterations': int(result.nit),
-            'final_objective': float(result.fun)
+            'final_objective': float(result.fun),
+            'tf_score': tf_score
         }, json_dumps_params={'ensure_ascii': False})
 
     except ImportError:
