@@ -153,9 +153,19 @@
                   <div>来源：<b>{{ bestOne?.source ?? 'N/A' }}</b>；分数：<b>{{ bestOne?.score !== undefined ? n6(bestOne!.score!) : 'N/A' }}</b></div>
                   <div class="mono mt-1">{{ (bestOne?.structure ?? []).join(', ') }}</div>
                   <div class="mt-1">
-                    <va-button size="small"  @click="openLayers({ idx: -1, tf: bestOne?.score ?? NaN, structure: bestOne?.structure ?? [] })">
+                    <va-button size="small"  @click="openLayers({ tf: bestOne?.score ?? NaN, structure: bestOne?.structure ?? [] })">
                       拟牛顿法
                     </va-button>
+                  </div>
+                  <!-- R/T 光谱图 -->
+                  <div v-if="bestSpectrum && bestOne" class="mt-3">
+                    <div class="block-title">R/T 光谱（TMM计算）</div>
+                    <div style="width: 100%; overflow-x: auto;">
+                      <canvas ref="spectrumCanvas" class="spectrum-canvas"></canvas>
+                    </div>
+                  </div>
+                  <div v-else-if="bestOne" class="mt-2" style="color: #6b7280; font-size: 12px;">
+                    正在计算R/T光谱...
                   </div>
                 </div>
               </va-card-content>
@@ -472,9 +482,9 @@ function rowsToDirectives (): string {
 
     const w = Math.max(0, Number(r.w) || 0)
     // 处理 ch 字段：可能是字符串，也可能是对象（防御性处理）
-    let ch: string = typeof r.ch === 'string' ? r.ch : (r.ch?.value || r.ch?.text || 'R')
+    let ch: string = typeof r.ch === 'string' ? r.ch : ((r.ch as any)?.value || (r.ch as any)?.text || 'R')
     // 处理 lam 字段：可能是数字，也可能是对象（防御性处理）
-    let lam: number = typeof r.lam === 'number' ? r.lam : (r.lam?.value || r.lam?.text || 550)
+    let lam: number = typeof r.lam === 'number' ? r.lam : ((r.lam as any)?.value || (r.lam as any)?.text || 550)
     lines.push(`${ch},${lam},${v},${w}`)
   }
   // 关键：逐行换行（并加一个结尾换行，防止最后一行也被黏连）
@@ -533,8 +543,8 @@ function recompute (): void {
     T_target.value = buildChannel(tPts, 0)
 
     const base = (weightMode.value === 'fullband') ? 1 : 0
-    let wR = lamNm.value.map(() => base)
-    let wT = lamNm.value.map(() => base)
+    let wR: number[] = lamNm.value.map(() => base)
+    let wT: number[] = lamNm.value.map(() => base)
     if (useGaussian.value) {
       wR = gaussianWeights(rPts.map(p => [p[0], p[2]]), gaussBase.value, sigmaNm.value)
       wT = gaussianWeights(tPts.map(p => [p[0], p[2]]), gaussBase.value, sigmaNm.value)
@@ -563,6 +573,163 @@ const wCanvas = ref<HTMLCanvasElement | null>(null)
 
 function drawLine (ctx: CanvasRenderingContext2D, xs: number[], ys: number[]) {
   if (!xs.length) return; ctx.beginPath(); ctx.moveTo(xs[0], ys[0]); for (let i = 1; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]); ctx.stroke()
+}
+
+/* ---------- 绘制R/T光谱图（按图片样式） ---------- */
+function drawSpectrumChart(): void {
+  if (!spectrumCanvas.value || !bestSpectrum.value) {
+    console.log('[drawSpectrumChart] 跳过绘制:', { 
+      hasCanvas: !!spectrumCanvas.value, 
+      hasSpectrum: !!bestSpectrum.value 
+    })
+    return
+  }
+  console.log('[drawSpectrumChart] 开始绘制图表')
+  
+  const c = spectrumCanvas.value
+  const ctx = c.getContext('2d') as CanvasRenderingContext2D
+  const W = 600  // 固定宽度
+  const H = 400  // 固定高度
+  
+  c.width = Math.max(1, Math.floor(W * devicePixelRatio))
+  c.height = Math.max(1, Math.floor(H * devicePixelRatio))
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.scale(devicePixelRatio, devicePixelRatio)
+  
+  // 清空画布
+  ctx.clearRect(0, 0, W, H)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, W, H)
+  
+  // 边距
+  const leftPad = 60
+  const rightPad = 40
+  const topPad = 40
+  const bottomPad = 50
+  const plotW = W - leftPad - rightPad
+  const plotH = H - topPad - bottomPad
+  
+  // 绘制网格
+  ctx.strokeStyle = '#e5e7eb'
+  ctx.lineWidth = 1
+  
+  // 水平网格线（对应百分比：0, 20, 40, 60, 80, 100）
+  for (let p = 0; p <= 100; p += 20) {
+    const y = topPad + plotH * (1 - p / 100)
+    ctx.beginPath()
+    ctx.moveTo(leftPad, y)
+    ctx.lineTo(leftPad + plotW, y)
+    ctx.stroke()
+  }
+  
+  // 垂直网格线（对应波长：400, 450, 500, 550, 600, 650, 700, 750）
+  const wavelengths = lamNm.value
+  const wlMin = wavelengths[0]
+  const wlMax = wavelengths[wavelengths.length - 1]
+  for (let wl = 400; wl <= 750; wl += 50) {
+    if (wl >= wlMin && wl <= wlMax) {
+      const x = leftPad + plotW * ((wl - wlMin) / (wlMax - wlMin))
+      ctx.beginPath()
+      ctx.moveTo(x, topPad)
+      ctx.lineTo(x, topPad + plotH)
+      ctx.stroke()
+    }
+  }
+  
+  // 绘制边框
+  ctx.strokeStyle = '#000000'
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(leftPad, topPad, plotW, plotH)
+  
+  // 绘制坐标轴标签
+  ctx.fillStyle = '#000000'
+  ctx.font = '12px Arial'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  
+  // X轴标签（波长）
+  for (let wl = 400; wl <= 750; wl += 50) {
+    if (wl >= wlMin && wl <= wlMax) {
+      const x = leftPad + plotW * ((wl - wlMin) / (wlMax - wlMin))
+      ctx.fillText(String(wl), x, H - bottomPad + 20)
+    }
+  }
+  ctx.fillText('Wavelength (nm)', W / 2, H - 10)
+  
+  // Y轴标签（百分比）
+  ctx.textAlign = 'right'
+  ctx.textBaseline = 'middle'
+  for (let p = 0; p <= 100; p += 20) {
+    const y = topPad + plotH * (1 - p / 100)
+    ctx.fillText(String(p), leftPad - 10, y)
+  }
+  ctx.save()
+  ctx.translate(15, H / 2)
+  ctx.rotate(-Math.PI / 2)
+  ctx.textAlign = 'center'
+  ctx.fillText('Percent (%)', 0, 0)
+  ctx.restore()
+  
+  // 绘制R和T曲线
+  const R = bestSpectrum.value.R
+  const T = bestSpectrum.value.T
+  
+  // 绘制R曲线（蓝色）
+  ctx.strokeStyle = '#1f77b4'  // 蓝色
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  for (let i = 0; i < wavelengths.length; i++) {
+    const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
+    const y = topPad + plotH * (1 - (R[i] * 100) / 100)  // R是0-1，转换为0-100%
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.stroke()
+  
+  // 绘制T曲线（橙色）
+  ctx.strokeStyle = '#ff7f0e'  // 橙色
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  for (let i = 0; i < wavelengths.length; i++) {
+    const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
+    const y = topPad + plotH * (1 - (T[i] * 100) / 100)  // T是0-1，转换为0-100%
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.stroke()
+  
+  // 绘制图例
+  const legendX = leftPad + plotW - 150
+  const legendY = topPad + 20
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(legendX - 5, legendY - 5, 145, 50)
+  ctx.strokeStyle = '#cccccc'
+  ctx.lineWidth = 1
+  ctx.strokeRect(legendX - 5, legendY - 5, 145, 50)
+  
+  ctx.font = '11px Arial'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  
+  // R图例
+  ctx.strokeStyle = '#1f77b4'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(legendX, legendY + 10)
+  ctx.lineTo(legendX + 30, legendY + 10)
+  ctx.stroke()
+  ctx.fillStyle = '#000000'
+  ctx.fillText('R (%) - Incoherent', legendX + 35, legendY + 10)
+  
+  // T图例
+  ctx.strokeStyle = '#ff7f0e'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(legendX, legendY + 30)
+  ctx.lineTo(legendX + 30, legendY + 30)
+  ctx.stroke()
+  ctx.fillStyle = '#000000'
+  ctx.fillText('T (%) - Incoherent', legendX + 35, legendY + 30)
 }
 
 function drawPlots (): void {
@@ -597,7 +764,12 @@ function drawPlots (): void {
 }
 
 function safeDraw () {
-  requestAnimationFrame(() => { nextTick().then(() => { if (!rtCanvas.value || !wCanvas.value) return; drawPlots() }) })
+  requestAnimationFrame(() => { 
+    nextTick().then(() => { 
+      if (rtCanvas.value && wCanvas.value) drawPlots()
+      if (spectrumCanvas.value && bestSpectrum.value) drawSpectrumChart()
+    }) 
+  })
 }
 
 onMounted(() => {
@@ -643,6 +815,22 @@ function downloadJSON (): void { const blob = new Blob([JSON.stringify(payload()
 const backendResp = ref<BackendResp | null>(null)
 const sampleTable = ref<SampleItem[]>([])
 const bestOne = ref<BestItem | null>(null)
+// 最佳膜系的TMM计算结果
+const bestSpectrum = ref<{ R: number[]; T: number[] } | null>(null)
+const spectrumCanvas = ref<HTMLCanvasElement | null>(null)
+
+// 监听bestSpectrum变化，确保图表绘制
+watch(bestSpectrum, () => {
+  if (bestSpectrum.value) {
+    nextTick().then(() => {
+      setTimeout(() => {
+        if (spectrumCanvas.value && bestSpectrum.value) {
+          drawSpectrumChart()
+        }
+      }, 100)
+    })
+  }
+}, { deep: true })
 
 // localStorage 键名
 const STORAGE_KEY = 'optogpt_results'
@@ -670,7 +858,13 @@ function loadResultsFromStorage() {
     const data = JSON.parse(saved)
     if (data.backendResp) backendResp.value = data.backendResp
     if (data.sampleTable) sampleTable.value = data.sampleTable
-    if (data.bestOne) bestOne.value = data.bestOne
+    if (data.bestOne) {
+      bestOne.value = data.bestOne
+      // 恢复时也计算光谱
+      if (data.bestOne?.structure && data.bestOne.structure.length > 0) {
+        calculateBestSpectrum(data.bestOne.structure)
+      }
+    }
     return true
   } catch (e) {
     console.warn('[Storage] 加载结果失败:', e)
@@ -745,6 +939,13 @@ async function runBackend (): Promise<void> {
     }
     // ========= /归一化 =========
 
+    // 如果有最佳结果，计算其TMM光谱
+    if (bestOne.value?.structure && bestOne.value.structure.length > 0) {
+      calculateBestSpectrum(bestOne.value.structure)
+    } else {
+      bestSpectrum.value = null
+    }
+
     // 保存结果到 localStorage（仅在成功时保存）
     saveResultsToStorage()
     
@@ -757,11 +958,62 @@ async function runBackend (): Promise<void> {
     backendResp.value = { error: msg }
     sampleTable.value = []
     bestOne.value = null
+    bestSpectrum.value = null
     // 错误时不保存结果，但可以保留之前成功的结果
   } finally {
     clearTimeout(timer)
   }
 }
+/* ---------- 计算最佳膜系的TMM光谱 ---------- */
+async function calculateBestSpectrum(structure: string[]) {
+  if (!structure || structure.length === 0) {
+    bestSpectrum.value = null
+    return
+  }
+  
+  try {
+    const resp = await fetch('/api/optogpt/calculate-spectrum/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ structure }),
+      credentials: 'omit',
+    })
+    
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '')
+      console.error('[calculate-spectrum] 请求失败:', resp.status, text)
+      bestSpectrum.value = null
+      return
+    }
+    
+    const json = await resp.json()
+    if (json.ok && json.R && json.T) {
+      console.log('[calculate-spectrum] 计算成功，R长度:', json.R.length, 'T长度:', json.T.length)
+      bestSpectrum.value = { R: json.R, T: json.T }
+      // 等待DOM更新后再绘制
+      nextTick().then(() => {
+        setTimeout(() => {
+          if (spectrumCanvas.value && bestSpectrum.value) {
+            console.log('[calculate-spectrum] 开始绘制图表')
+            drawSpectrumChart()
+          } else {
+            console.warn('[calculate-spectrum] 画布或数据未就绪:', {
+              hasCanvas: !!spectrumCanvas.value,
+              hasSpectrum: !!bestSpectrum.value
+            })
+          }
+        }, 200)
+      })
+    } else {
+      console.error('[calculate-spectrum] 返回格式错误:', json)
+      bestSpectrum.value = null
+    }
+  } catch (err: any) {
+    console.error('[calculate-spectrum] 计算失败:', err)
+    bestSpectrum.value = null
+  }
+}
+
 /* ---------- 解析 token -> 层表 ---------- */
 function parseTokens(tokens: string[]) { const rows: Array<{ material: string; thickness: number }> = []; for (const tok of tokens) { const s = String(tok); if (!s.includes('_')) continue; const [mat, raw] = s.split('_', 2); const num = (raw || '').replace(/[^0-9.]/g, ''); if (!num) continue; rows.push({ material: mat, thickness: Number(num) }) } return rows }
 
@@ -810,6 +1062,20 @@ const tab = ref<'preview' | 'table' | 'plot'>('plot')
 .plot-grid { display: grid; gap: 16px; }
 .plot { width: 100%; height: 220px; border: 1px solid #e5e7eb; border-radius: 8px; }
 .plot.small { height: 160px; }
+.spectrum-canvas { 
+  width: 100%; 
+  max-width: 600px; 
+  height: 400px; 
+  border: 1px solid #e5e7eb; 
+  border-radius: 8px; 
+  background: #ffffff; 
+  display: block;
+}
+.block-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
 .best-box { margin-top: 12px; padding: 10px; border: 1px dashed #e5e7eb; border-radius: 8px; background: #f9fafb; }
 .best-title { font-weight: 700; margin-bottom: 4px; }

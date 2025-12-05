@@ -669,3 +669,57 @@ def infer(request: HttpRequest):
     except Exception as e:
         # 把异常信息直接回给前端，便于定位
         return JsonResponse({'ok': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def calculate_spectrum(request: HttpRequest):
+    """POST /api/optogpt/calculate-spectrum/ - 计算膜系的R/T光谱"""
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'Only POST allowed'}, status=405)
+
+    try:
+        raw_body = request.body.decode('utf-8') if request.body else ''
+        try:
+            body = json.loads(raw_body) if raw_body else {}
+        except Exception as e:
+            return JsonResponse({'ok': False, 'error': f'Invalid JSON: {e}', 'raw': raw_body[:500]}, status=400)
+
+        structure = body.get('structure', [])
+        if not structure or not isinstance(structure, list):
+            return JsonResponse({'ok': False, 'error': 'structure must be a non-empty list'}, status=400)
+
+        # 解析结构：从 ['TiO2_50', 'SiO2_100'] 格式提取材料和厚度
+        materials, thicknesses = return_mat_thick(structure, max_layers=20)
+        
+        if not materials or not thicknesses:
+            return JsonResponse({'ok': False, 'error': 'Failed to parse structure'}, status=400)
+
+        # 使用TMM计算R/T
+        wavelengths_um = lam_nm / 1e3  # nm -> µm
+        result = spectrum(
+            materials=materials,
+            thickness=thicknesses,
+            pol='u',  # 非偏振光
+            theta=0,  # 垂直入射
+            wavelengths=wavelengths_um,
+            nk_dict=nk_dict,
+            substrate='Glass_Substrate',
+            substrate_thick=500000.0
+        )
+
+        # result 是 [R..., T...] 格式
+        L = len(lam_nm)
+        R_values = result[:L]
+        T_values = result[L:]
+
+        return JsonResponse({
+            'ok': True,
+            'R': R_values,
+            'T': T_values,
+            'wavelengths': lam_nm.tolist(),
+            'materials': materials,
+            'thicknesses': thicknesses
+        }, json_dumps_params={'ensure_ascii': False})
+
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)}, status=500)
