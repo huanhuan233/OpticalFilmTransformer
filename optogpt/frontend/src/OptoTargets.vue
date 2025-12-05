@@ -146,7 +146,10 @@
                             <td>{{ parseTokens(s.structure).length }}</td>
                             <td class="mono">{{ s.structure.join(', ') }}</td>
                             <td class="center">
-                            <va-button size="small"  @click="openLayers(s)">拟牛顿法</va-button>
+                            <va-checkbox 
+                              :model-value="selectedSamples.includes(i)" 
+                              @update:model-value="(val: boolean) => onSampleSelectionChange(i, val)" 
+                            />
                             </td>
                         </tr>
                         </tbody>
@@ -157,22 +160,38 @@
                   <div class="best-title">最佳（TFCalc）</div>
                   <div>来源：<b>{{ bestOne?.source ?? 'N/A' }}</b>；分数：<b>{{ bestOne?.score !== undefined ? n6(bestOne!.score!) : 'N/A' }}</b></div>
                   <div class="mono mt-1">{{ (bestOne?.structure ?? []).join(', ') }}</div>
-                  <div class="mt-1">
-                    <va-button size="small"  @click="openLayers({ tf: bestOne?.score ?? NaN, structure: bestOne?.structure ?? [] })">
-                      拟牛顿法
-                    </va-button>
-                  </div>
                   <!-- R/T 光谱图 -->
                   <div v-if="bestSpectrum && bestOne" class="mt-3">
                     <div class="block-title">R/T 光谱（TMM计算）</div>
                     <div v-if="enableOptimization && !optimizedSpectrum" class="mb-2" style="color: #6b7280; font-size: 12px;">
                       正在优化膜系结构...
                     </div>
-                    <div style="width: 100%; overflow-x: auto;">
-                      <canvas ref="spectrumCanvas" class="spectrum-canvas"></canvas>
+                    <div style="display: flex; gap: 16px;">
+                      <div style="flex: 1; overflow-x: auto;">
+                        <canvas 
+                          ref="spectrumCanvas" 
+                          class="spectrum-canvas" 
+                          @mousemove="onCanvasMouseMove" 
+                          @mouseleave="onCanvasMouseLeave"
+                        ></canvas>
+                        <div v-if="hoveredCurve" class="mt-2" style="font-size: 12px; color: #059669; text-align: center;">
+                          {{ hoveredCurve }}
+                        </div>
+                      </div>
+                      <div ref="legendContainer" class="spectrum-legend"></div>
                     </div>
-                    <div v-if="optimizedSpectrum" class="mt-2" style="font-size: 12px; color: #059669;">
-                      <div>优化后结构：{{ optimizedSpectrum.optimized_structure.join(', ') }}</div>
+                    <!-- 显示所有优化后的结构 -->
+                    <div v-if="enableOptimization" class="mt-2" style="font-size: 12px;">
+                      <!-- 最佳结果的优化后结构 -->
+                      <div v-if="optimizedSpectrum" style="color: #059669; margin-bottom: 8px;">
+                        <div><b>最佳-优化后结构：</b>{{ optimizedSpectrum.optimized_structure.join(', ') }}</div>
+                      </div>
+                      <!-- 选中采样结果的优化后结构 -->
+                      <template v-for="sampleIdx in selectedSamples" :key="sampleIdx">
+                        <div v-if="getOptimizedStructure(sampleIdx)" style="color: #059669; margin-bottom: 8px;">
+                          <div><b>#{{ String(sampleIdx).padStart(2, '0') }}-优化后结构：</b>{{ getOptimizedStructure(sampleIdx) }}</div>
+                        </div>
+                      </template>
                     </div>
                   </div>
                   <div v-else-if="bestOne" class="mt-2" style="color: #6b7280; font-size: 12px;">
@@ -586,33 +605,24 @@ function drawLine (ctx: CanvasRenderingContext2D, xs: number[], ys: number[]) {
   if (!xs.length) return; ctx.beginPath(); ctx.moveTo(xs[0], ys[0]); for (let i = 1; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]); ctx.stroke()
 }
 
-/* ---------- 绘制R/T光谱图（按图片样式） ---------- */
+/* ---------- 绘制R/T光谱图（支持多结果显示） ---------- */
 function drawSpectrumChart(): void {
-  if (!spectrumCanvas.value || !bestSpectrum.value) {
-    console.log('[drawSpectrumChart] 跳过绘制:', { 
-      hasCanvas: !!spectrumCanvas.value, 
-      hasSpectrum: !!bestSpectrum.value 
-    })
-    return
-  }
-  console.log('[drawSpectrumChart] 开始绘制图表')
+  if (!spectrumCanvas.value || !bestSpectrum.value) return
   
   const c = spectrumCanvas.value
   const ctx = c.getContext('2d') as CanvasRenderingContext2D
-  const W = 600  // 固定宽度
-  const H = 400  // 固定高度
+  const W = 600
+  const H = 400
   
   c.width = Math.max(1, Math.floor(W * devicePixelRatio))
   c.height = Math.max(1, Math.floor(H * devicePixelRatio))
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.scale(devicePixelRatio, devicePixelRatio)
   
-  // 清空画布
   ctx.clearRect(0, 0, W, H)
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, W, H)
   
-  // 边距
   const leftPad = 60
   const rightPad = 40
   const topPad = 40
@@ -620,11 +630,13 @@ function drawSpectrumChart(): void {
   const plotW = W - leftPad - rightPad
   const plotH = H - topPad - bottomPad
   
+  const wavelengths = lamNm.value
+  const wlMin = wavelengths[0]
+  const wlMax = wavelengths[wavelengths.length - 1]
+  
   // 绘制网格
   ctx.strokeStyle = '#e5e7eb'
   ctx.lineWidth = 1
-  
-  // 水平网格线（对应百分比：0, 20, 40, 60, 80, 100）
   for (let p = 0; p <= 100; p += 20) {
     const y = topPad + plotH * (1 - p / 100)
     ctx.beginPath()
@@ -632,11 +644,6 @@ function drawSpectrumChart(): void {
     ctx.lineTo(leftPad + plotW, y)
     ctx.stroke()
   }
-  
-  // 垂直网格线（对应波长：400, 450, 500, 550, 600, 650, 700, 750）
-  const wavelengths = lamNm.value
-  const wlMin = wavelengths[0]
-  const wlMax = wavelengths[wavelengths.length - 1]
   for (let wl = 400; wl <= 750; wl += 50) {
     if (wl >= wlMin && wl <= wlMax) {
       const x = leftPad + plotW * ((wl - wlMin) / (wlMax - wlMin))
@@ -652,13 +659,11 @@ function drawSpectrumChart(): void {
   ctx.lineWidth = 1.5
   ctx.strokeRect(leftPad, topPad, plotW, plotH)
   
-  // 绘制坐标轴标签
+  // 坐标轴标签
   ctx.fillStyle = '#000000'
   ctx.font = '12px Arial'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  
-  // X轴标签（波长）
   for (let wl = 400; wl <= 750; wl += 50) {
     if (wl >= wlMin && wl <= wlMax) {
       const x = leftPad + plotW * ((wl - wlMin) / (wlMax - wlMin))
@@ -667,9 +672,7 @@ function drawSpectrumChart(): void {
   }
   ctx.fillText('Wavelength (nm)', W / 2, H - 10)
   
-  // Y轴标签（百分比）
   ctx.textAlign = 'right'
-  ctx.textBaseline = 'middle'
   for (let p = 0; p <= 100; p += 20) {
     const y = topPad + plotH * (1 - p / 100)
     ctx.fillText(String(p), leftPad - 10, y)
@@ -681,126 +684,248 @@ function drawSpectrumChart(): void {
   ctx.fillText('Percent (%)', 0, 0)
   ctx.restore()
   
-  // 绘制R和T曲线
-  const R = bestSpectrum.value.R
-  const T = bestSpectrum.value.T
+  // 绘制最佳结果的初始曲线
+  const bestColor = colorPalette[0]
+  drawCurve(ctx, bestSpectrum.value.R, bestSpectrum.value.T, wavelengths, wlMin, wlMax, 
+            leftPad, topPad, plotW, plotH, bestColor.R, bestColor.T, true, '最佳-初始')
   
-  // 绘制初始R曲线（蓝色，虚线）
-  ctx.strokeStyle = '#1f77b4'  // 蓝色
-  ctx.lineWidth = 2
-  ctx.setLineDash([5, 5])  // 虚线
+  // 绘制最佳结果的优化后曲线
+  if (enableOptimization.value && optimizedSpectrum.value) {
+    drawCurve(ctx, optimizedSpectrum.value.R, optimizedSpectrum.value.T, wavelengths, wlMin, wlMax,
+              leftPad, topPad, plotW, plotH, bestColor.R, bestColor.T, false, '最佳-优化后')
+  }
+  
+  // 绘制选中采样结果的曲线
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  samples.forEach((sampleIdx, colorIdx) => {
+    const spectrum = sampleSpectra.value.get(sampleIdx)
+    if (!spectrum) return
+    
+    const color = colorPalette[(colorIdx + 1) % colorPalette.length]
+    const label = `#${String(sampleIdx).padStart(2, '0')}`
+    
+    // 绘制初始曲线
+    if (spectrum.initial) {
+      drawCurve(ctx, spectrum.initial.R, spectrum.initial.T, wavelengths, wlMin, wlMax,
+                leftPad, topPad, plotW, plotH, color.R, color.T, true, `${label}-初始`)
+    }
+    
+    // 绘制优化后曲线
+    if (spectrum.optimized) {
+      drawCurve(ctx, spectrum.optimized.R, spectrum.optimized.T, wavelengths, wlMin, wlMax,
+                leftPad, topPad, plotW, plotH, color.R, color.T, false, `${label}-优化后`)
+    }
+  })
+  
+  // 更新外部图例
+  updateLegend()
+}
+
+function drawCurve(ctx: CanvasRenderingContext2D, R: number[], T: number[], wavelengths: number[],
+                  wlMin: number, wlMax: number, leftPad: number, topPad: number, 
+                  plotW: number, plotH: number, colorR: string, colorT: string, 
+                  isDashed: boolean, label: string) {
+  ctx.setLineDash(isDashed ? [5, 5] : [])
+  
+  // 绘制R曲线
+  ctx.strokeStyle = colorR
+  ctx.lineWidth = isDashed ? 2 : 2.5
   ctx.beginPath()
   for (let i = 0; i < wavelengths.length; i++) {
     const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
-    const y = topPad + plotH * (1 - (R[i] * 100) / 100)  // R是0-1，转换为0-100%
+    const y = topPad + plotH * (1 - (R[i] * 100) / 100)
     if (i === 0) ctx.moveTo(x, y)
     else ctx.lineTo(x, y)
   }
   ctx.stroke()
   
-  // 绘制初始T曲线（橙色，虚线）
-  ctx.strokeStyle = '#ff7f0e'  // 橙色
-  ctx.lineWidth = 2
+  // 绘制T曲线
+  ctx.strokeStyle = colorT
+  ctx.lineWidth = isDashed ? 2 : 2.5
   ctx.beginPath()
   for (let i = 0; i < wavelengths.length; i++) {
     const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
-    const y = topPad + plotH * (1 - (T[i] * 100) / 100)  // T是0-1，转换为0-100%
+    const y = topPad + plotH * (1 - (T[i] * 100) / 100)
     if (i === 0) ctx.moveTo(x, y)
     else ctx.lineTo(x, y)
   }
   ctx.stroke()
-  ctx.setLineDash([])  // 恢复实线
   
-  // 如果启用了优化且有优化结果，绘制优化后的曲线
+  ctx.setLineDash([])
+}
+
+function updateLegend() {
+  if (!legendContainer.value) return
+  
+  const items: Array<{ label: string; colorR: string; colorT: string; isDashed: boolean }> = []
+  
+  // 最佳结果
+  const bestColor = colorPalette[0]
+  items.push({ label: '最佳-初始', colorR: bestColor.R, colorT: bestColor.T, isDashed: true })
   if (enableOptimization.value && optimizedSpectrum.value) {
-    const optR = optimizedSpectrum.value.R
-    const optT = optimizedSpectrum.value.T
-    
-    // 绘制优化后的R曲线（深蓝色，实线）
-    ctx.strokeStyle = '#0d47a1'  // 深蓝色
-    ctx.lineWidth = 2.5
-    ctx.beginPath()
-    for (let i = 0; i < wavelengths.length; i++) {
-      const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
-      const y = topPad + plotH * (1 - (optR[i] * 100) / 100)
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-    
-    // 绘制优化后的T曲线（深橙色，实线）
-    ctx.strokeStyle = '#e65100'  // 深橙色
-    ctx.lineWidth = 2.5
-    ctx.beginPath()
-    for (let i = 0; i < wavelengths.length; i++) {
-      const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
-      const y = topPad + plotH * (1 - (optT[i] * 100) / 100)
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
+    items.push({ label: '最佳-优化后', colorR: bestColor.R, colorT: bestColor.T, isDashed: false })
   }
   
-  // 绘制图例
-  const legendX = leftPad + plotW - 180
-  const legendHeight = enableOptimization.value && optimizedSpectrum.value ? 90 : 50
-  const legendY = topPad + 20
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(legendX - 5, legendY - 5, 175, legendHeight)
-  ctx.strokeStyle = '#cccccc'
-  ctx.lineWidth = 1
-  ctx.strokeRect(legendX - 5, legendY - 5, 175, legendHeight)
-  
-  ctx.font = '11px Arial'
-  ctx.textAlign = 'left'
-  ctx.textBaseline = 'middle'
-  
-  // 初始R图例（虚线）
-  ctx.strokeStyle = '#1f77b4'
-  ctx.lineWidth = 2
-  ctx.setLineDash([5, 5])
-  ctx.beginPath()
-  ctx.moveTo(legendX, legendY + 10)
-  ctx.lineTo(legendX + 30, legendY + 10)
-  ctx.stroke()
-  ctx.setLineDash([])
-  ctx.fillStyle = '#000000'
-  ctx.fillText('R (%) - 初始', legendX + 35, legendY + 10)
-  
-  // 初始T图例（虚线）
-  ctx.strokeStyle = '#ff7f0e'
-  ctx.lineWidth = 2
-  ctx.setLineDash([5, 5])
-  ctx.beginPath()
-  ctx.moveTo(legendX, legendY + 30)
-  ctx.lineTo(legendX + 30, legendY + 30)
-  ctx.stroke()
-  ctx.setLineDash([])
-  ctx.fillStyle = '#000000'
-  ctx.fillText('T (%) - 初始', legendX + 35, legendY + 30)
-  
-  // 如果启用了优化，添加优化后的图例
-  if (enableOptimization.value && optimizedSpectrum.value) {
-    // 优化后R图例（实线）
-    ctx.strokeStyle = '#0d47a1'
-    ctx.lineWidth = 2.5
-    ctx.beginPath()
-    ctx.moveTo(legendX, legendY + 50)
-    ctx.lineTo(legendX + 30, legendY + 50)
-    ctx.stroke()
-    ctx.fillStyle = '#000000'
-    ctx.fillText('R (%) - 优化后', legendX + 35, legendY + 50)
+  // 选中的采样结果
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  samples.forEach((sampleIdx, colorIdx) => {
+    const spectrum = sampleSpectra.value.get(sampleIdx)
+    if (!spectrum) return
     
-    // 优化后T图例（实线）
-    ctx.strokeStyle = '#e65100'
-    ctx.lineWidth = 2.5
-    ctx.beginPath()
-    ctx.moveTo(legendX, legendY + 70)
-    ctx.lineTo(legendX + 30, legendY + 70)
-    ctx.stroke()
-    ctx.fillStyle = '#000000'
-    ctx.fillText('T (%) - 优化后', legendX + 35, legendY + 70)
+    const color = colorPalette[(colorIdx + 1) % colorPalette.length]
+    const label = `#${String(sampleIdx).padStart(2, '0')}`
+    
+    if (spectrum.initial) {
+      items.push({ label: `${label}-初始`, colorR: color.R, colorT: color.T, isDashed: true })
+    }
+    if (spectrum.optimized) {
+      items.push({ label: `${label}-优化后`, colorR: color.R, colorT: color.T, isDashed: false })
+    }
+  })
+  
+  legendContainer.value.innerHTML = items.map((item) => {
+    const dashStyle = item.isDashed ? 'stroke-dasharray: 5,5;' : ''
+    return `
+      <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 11px;">
+        <svg width="30" height="2" style="margin-right: 8px;">
+          <line x1="0" y1="1" x2="30" y2="1" stroke="${item.colorR}" stroke-width="2" style="${dashStyle}" />
+        </svg>
+        <span style="color: #000;">R - ${item.label}</span>
+      </div>
+      <div style="display: flex; align-items: center; margin-bottom: 8px; font-size: 11px;">
+        <svg width="30" height="2" style="margin-right: 8px;">
+          <line x1="0" y1="1" x2="30" y2="1" stroke="${item.colorT}" stroke-width="2" style="${dashStyle}" />
+        </svg>
+        <span style="color: #000;">T - ${item.label}</span>
+      </div>
+    `
+  }).join('')
+}
+
+function onCanvasMouseMove(event: MouseEvent) {
+  if (!spectrumCanvas.value || !bestSpectrum.value) return
+  
+  const rect = spectrumCanvas.value.getBoundingClientRect()
+  const x = (event.clientX - rect.left) * (devicePixelRatio || 1)
+  const y = (event.clientY - rect.top) * (devicePixelRatio || 1)
+  
+  const W = 600
+  const H = 400
+  const leftPad = 60
+  const rightPad = 40
+  const topPad = 40
+  const bottomPad = 50
+  const plotW = W - leftPad - rightPad
+  const plotH = H - topPad - bottomPad
+  
+  const wavelengths = lamNm.value
+  const wlMin = wavelengths[0]
+  const wlMax = wavelengths[wavelengths.length - 1]
+  
+  // 计算当前鼠标位置对应的波长索引
+  const relX = (x - leftPad) / plotW
+  if (relX < 0 || relX > 1) {
+    hoveredCurve.value = null
+    return
   }
+  
+  const wavelength = wlMin + relX * (wlMax - wlMin)
+  const wlIdx = Math.round((wavelength - wlMin) / ((wlMax - wlMin) / (wavelengths.length - 1)))
+  const clampedIdx = Math.max(0, Math.min(wavelengths.length - 1, wlIdx))
+  
+  // 计算所有曲线在该波长处的Y值，找出最接近鼠标位置的曲线
+  let minDist = Infinity
+  let closestCurve: string | null = null
+  
+  // 检查最佳结果的曲线
+  if (bestSpectrum.value) {
+    const bestR = bestSpectrum.value.R[clampedIdx] * 100
+    const bestT = bestSpectrum.value.T[clampedIdx] * 100
+    const bestRY = topPad + plotH * (1 - bestR / 100)
+    const bestTY = topPad + plotH * (1 - bestT / 100)
+    
+    const distR = Math.abs(y - bestRY)
+    const distT = Math.abs(y - bestTY)
+    
+    if (distR < minDist && distR < 20) {
+      minDist = distR
+      closestCurve = '最佳-初始 R'
+    }
+    if (distT < minDist && distT < 20) {
+      minDist = distT
+      closestCurve = '最佳-初始 T'
+    }
+    
+    if (enableOptimization.value && optimizedSpectrum.value) {
+      const optR = optimizedSpectrum.value.R[clampedIdx] * 100
+      const optT = optimizedSpectrum.value.T[clampedIdx] * 100
+      const optRY = topPad + plotH * (1 - optR / 100)
+      const optTY = topPad + plotH * (1 - optT / 100)
+      
+      const distOptR = Math.abs(y - optRY)
+      const distOptT = Math.abs(y - optTY)
+      
+      if (distOptR < minDist && distOptR < 20) {
+        minDist = distOptR
+        closestCurve = '最佳-优化后 R'
+      }
+      if (distOptT < minDist && distOptT < 20) {
+        minDist = distOptT
+        closestCurve = '最佳-优化后 T'
+      }
+    }
+  }
+  
+  // 检查选中采样结果的曲线
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  samples.forEach(sampleIdx => {
+    const spectrum = sampleSpectra.value.get(sampleIdx)
+    const label = `#${String(sampleIdx).padStart(2, '0')}`
+    
+    if (spectrum?.initial) {
+      const r = spectrum.initial.R[clampedIdx] * 100
+      const t = spectrum.initial.T[clampedIdx] * 100
+      const rY = topPad + plotH * (1 - r / 100)
+      const tY = topPad + plotH * (1 - t / 100)
+      
+      const distR = Math.abs(y - rY)
+      const distT = Math.abs(y - tY)
+      
+      if (distR < minDist && distR < 20) {
+        minDist = distR
+        closestCurve = `${label}-初始 R`
+      }
+      if (distT < minDist && distT < 20) {
+        minDist = distT
+        closestCurve = `${label}-初始 T`
+      }
+    }
+    
+    if (spectrum?.optimized) {
+      const r = spectrum.optimized.R[clampedIdx] * 100
+      const t = spectrum.optimized.T[clampedIdx] * 100
+      const rY = topPad + plotH * (1 - r / 100)
+      const tY = topPad + plotH * (1 - t / 100)
+      
+      const distR = Math.abs(y - rY)
+      const distT = Math.abs(y - tY)
+      
+      if (distR < minDist && distR < 20) {
+        minDist = distR
+        closestCurve = `${label}-优化后 R`
+      }
+      if (distT < minDist && distT < 20) {
+        minDist = distT
+        closestCurve = `${label}-优化后 T`
+      }
+    }
+  })
+  
+  hoveredCurve.value = closestCurve
+}
+
+function onCanvasMouseLeave() {
+  hoveredCurve.value = null
 }
 
 function drawPlots (): void {
@@ -838,7 +963,10 @@ function safeDraw () {
   requestAnimationFrame(() => { 
     nextTick().then(() => { 
       if (rtCanvas.value && wCanvas.value) drawPlots()
-      if (spectrumCanvas.value && bestSpectrum.value) drawSpectrumChart()
+      if (spectrumCanvas.value && bestSpectrum.value) {
+        drawSpectrumChart()
+        updateLegend()
+      }
     }) 
   })
 }
@@ -890,6 +1018,24 @@ const bestOne = ref<BestItem | null>(null)
 const bestSpectrum = ref<{ R: number[]; T: number[] } | null>(null)
 const optimizedSpectrum = ref<{ R: number[]; T: number[]; optimized_structure: string[] } | null>(null)
 const spectrumCanvas = ref<HTMLCanvasElement | null>(null)
+const legendContainer = ref<HTMLElement | null>(null)
+const selectedSamples = ref<number[]>([])  // 选中的采样结果索引
+const sampleSpectra = ref<Map<number, { 
+  initial: { R: number[]; T: number[] } | null; 
+  optimized: { R: number[]; T: number[]; optimized_structure: string[] } | null 
+}>>(new Map())
+const hoveredCurve = ref<string | null>(null)
+
+// 颜色方案
+const colorPalette = [
+  { R: '#1f77b4', T: '#ff7f0e' },  // 最佳结果
+  { R: '#9467bd', T: '#8c564b' },  // #00
+  { R: '#2ca02c', T: '#d62728' },  // #01
+  { R: '#ff7f0e', T: '#bcbd22' },  // #02
+  { R: '#17becf', T: '#e377c2' },  // #03
+  { R: '#7f7f7f', T: '#c7c7c7' },  // #04
+  { R: '#bcbd22', T: '#17becf' },  // #05
+]
 const enableOptimization = ref<boolean>(false)
 
 // 监听bestSpectrum变化，确保图表绘制
@@ -905,19 +1051,6 @@ watch(bestSpectrum, () => {
   }
 }, { deep: true })
 
-// 监听优化开关变化
-watch(enableOptimization, (newVal) => {
-  if (newVal && bestOne.value?.structure && bestOne.value.structure.length > 0) {
-    // 开关打开时，执行优化
-    optimizeBestStructure(bestOne.value.structure)
-  } else {
-    // 开关关闭时，清除优化结果
-    optimizedSpectrum.value = null
-    if (spectrumCanvas.value && bestSpectrum.value) {
-      drawSpectrumChart()
-    }
-  }
-})
 
 // localStorage 键名
 const STORAGE_KEY = 'optogpt_results'
@@ -1089,6 +1222,7 @@ async function calculateBestSpectrum(structure: string[]) {
           if (spectrumCanvas.value && bestSpectrum.value) {
             console.log('[calculate-spectrum] 开始绘制图表')
             drawSpectrumChart()
+            updateLegend()
           } else {
             console.warn('[calculate-spectrum] 画布或数据未就绪:', {
               hasCanvas: !!spectrumCanvas.value,
@@ -1148,6 +1282,7 @@ async function optimizeBestStructure(structure: string[]) {
         setTimeout(() => {
           if (spectrumCanvas.value && bestSpectrum.value) {
             drawSpectrumChart()
+            updateLegend()
           }
         }, 100)
       })
@@ -1160,6 +1295,137 @@ async function optimizeBestStructure(structure: string[]) {
     optimizedSpectrum.value = null
   }
 }
+
+/* ---------- 采样结果选择处理 ---------- */
+async function onSampleSelectionChange(sampleIdx: number, checked: boolean) {
+  if (!Array.isArray(selectedSamples.value)) {
+    selectedSamples.value = []
+  }
+  
+  if (checked) {
+    if (!selectedSamples.value.includes(sampleIdx)) {
+      selectedSamples.value.push(sampleIdx)
+    }
+    // 选中：计算该采样结果的光谱
+    const sample = sampleTable.value[sampleIdx]
+    if (!sample || !sample.structure) return
+    
+    // 初始化该采样结果的光谱数据
+    if (!sampleSpectra.value.has(sampleIdx)) {
+      sampleSpectra.value.set(sampleIdx, { initial: null, optimized: null })
+    }
+    
+    // 计算初始光谱
+    try {
+      const resp = await fetch('/api/optogpt/calculate-spectrum/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ structure: sample.structure }),
+        credentials: 'omit',
+      })
+      
+      if (resp.ok) {
+        const json = await resp.json()
+        if (json.ok && json.R && json.T) {
+          const spectrum = sampleSpectra.value.get(sampleIdx)!
+          spectrum.initial = { R: json.R, T: json.T }
+          
+          // 如果优化开关打开，也计算优化后的光谱
+          if (enableOptimization.value) {
+            await optimizeSampleStructure(sampleIdx, sample.structure)
+          }
+          
+          drawSpectrumChart()
+          updateLegend()
+        }
+      }
+    } catch (err: any) {
+      console.error(`[sample-${sampleIdx}] 计算光谱失败:`, err)
+    }
+  } else {
+    // 取消选中：从列表中移除
+    const index = selectedSamples.value.indexOf(sampleIdx)
+    if (index > -1) {
+      selectedSamples.value.splice(index, 1)
+    }
+    // 移除该采样结果的光谱数据
+    sampleSpectra.value.delete(sampleIdx)
+    drawSpectrumChart()
+    updateLegend()
+  }
+}
+
+async function optimizeSampleStructure(sampleIdx: number, structure: string[]) {
+  try {
+    const resp = await fetch('/api/optogpt/optimize-structure/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ 
+        structure,
+        target_R: R_target.value,
+        target_T: T_target.value,
+        wavelengths: lamNm.value
+      }),
+      credentials: 'omit',
+    })
+    
+    if (resp.ok) {
+      const json = await resp.json()
+      if (json.ok && json.R && json.T && json.optimized_structure) {
+        const spectrum = sampleSpectra.value.get(sampleIdx)
+        if (spectrum) {
+          spectrum.optimized = { 
+            R: json.R, 
+            T: json.T,
+            optimized_structure: json.optimized_structure
+          }
+          drawSpectrumChart()
+          updateLegend()
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[sample-${sampleIdx}] 优化失败:`, err)
+  }
+}
+
+/* ---------- 获取优化后的结构 ---------- */
+function getOptimizedStructure(sampleIdx: number): string | null {
+  const spectrum = sampleSpectra.value.get(sampleIdx)
+  if (spectrum?.optimized?.optimized_structure) {
+    return spectrum.optimized.optimized_structure.join(', ')
+  }
+  return null
+}
+
+// 监听优化开关变化，更新所有选中采样结果的优化状态
+watch(enableOptimization, async (newVal) => {
+  if (newVal) {
+    // 为所有选中的采样结果执行优化
+    const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+    for (const sampleIdx of samples) {
+      const sample = sampleTable.value[sampleIdx]
+      if (sample?.structure) {
+        await optimizeSampleStructure(sampleIdx, sample.structure)
+      }
+    }
+    
+    // 优化最佳结果
+    if (bestOne.value?.structure) {
+      optimizeBestStructure(bestOne.value.structure)
+    }
+  } else {
+    // 清除所有优化结果
+    optimizedSpectrum.value = null
+    const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+    samples.forEach(sampleIdx => {
+      const spectrum = sampleSpectra.value.get(sampleIdx)
+      if (spectrum) spectrum.optimized = null
+    })
+    drawSpectrumChart()
+    updateLegend()
+  }
+})
 
 /* ---------- 解析 token -> 层表 ---------- */
 function parseTokens(tokens: string[]) { const rows: Array<{ material: string; thickness: number }> = []; for (const tok of tokens) { const s = String(tok); if (!s.includes('_')) continue; const [mat, raw] = s.split('_', 2); const num = (raw || '').replace(/[^0-9.]/g, ''); if (!num) continue; rows.push({ material: mat, thickness: Number(num) }) } return rows }
@@ -1217,6 +1483,16 @@ const tab = ref<'preview' | 'table' | 'plot'>('plot')
   border-radius: 8px; 
   background: #ffffff; 
   display: block;
+  cursor: crosshair;
+}
+.spectrum-legend {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  max-height: 400px;
+  overflow-y: auto;
+  min-width: 200px;
 }
 .block-title {
   font-weight: 600;
