@@ -723,3 +723,128 @@ def calculate_spectrum(request: HttpRequest):
 
     except Exception as e:
         return JsonResponse({'ok': False, 'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def optimize_structure(request: HttpRequest):
+    """POST /api/optogpt/optimize-structure/ - 使用BFGS优化膜系结构厚度"""
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'Only POST allowed'}, status=405)
+
+    try:
+        from scipy.optimize import minimize
+        
+        raw_body = request.body.decode('utf-8') if request.body else ''
+        try:
+            body = json.loads(raw_body) if raw_body else {}
+        except Exception as e:
+            return JsonResponse({'ok': False, 'error': f'Invalid JSON: {e}', 'raw': raw_body[:500]}, status=400)
+
+        structure = body.get('structure', [])
+        target_R = body.get('target_R', [])
+        target_T = body.get('target_T', [])
+        wavelengths_nm = body.get('wavelengths', [])
+        
+        if not structure or not isinstance(structure, list):
+            return JsonResponse({'ok': False, 'error': 'structure must be a non-empty list'}, status=400)
+        
+        if not wavelengths_nm:
+            wavelengths_nm = lam_nm.tolist()
+        else:
+            wavelengths_nm = np.array(wavelengths_nm, dtype=float)
+
+        # 解析结构：从 ['TiO2_50', 'SiO2_100'] 格式提取材料和厚度
+        materials, initial_thicknesses = return_mat_thick(structure, max_layers=20)
+        
+        if not materials or not initial_thicknesses:
+            return JsonResponse({'ok': False, 'error': 'Failed to parse structure'}, status=400)
+
+        # 构建目标反射率（如果提供了target_R，使用它；否则使用target_T的补集）
+        if target_R and len(target_R) == len(wavelengths_nm):
+            target_R_array = np.array(target_R, dtype=float)
+        elif target_T and len(target_T) == len(wavelengths_nm):
+            # 如果只提供了T，假设R = 1 - T（忽略吸收）
+            target_R_array = 1.0 - np.array(target_T, dtype=float)
+        else:
+            # 默认目标：最小反射率
+            target_R_array = np.zeros_like(wavelengths_nm, dtype=float)
+
+        # 使用BFGS优化厚度
+        def tmm_reflectance_single(material_list, d_list, wavelength):
+            """计算单波长下的反射率（使用现有的spectrum函数）"""
+            wavelengths_um = np.array([wavelength / 1e3])
+            result = spectrum(
+                materials=material_list,
+                thickness=d_list,
+                pol='u',
+                theta=0,
+                wavelengths=wavelengths_um,
+                nk_dict=nk_dict,
+                substrate='Glass_Substrate',
+                substrate_thick=500000.0
+            )
+            # result是[R..., T...]格式，返回R
+            return result[0]
+
+        def objective_function(d_list):
+            """目标函数：最小化反射率与目标的均方误差"""
+            # 检查厚度范围（20-300nm）
+            for d in d_list:
+                if d < 20.0 or d > 300.0:
+                    return 1e20
+            R = np.array([tmm_reflectance_single(materials, d_list, wl) for wl in wavelengths_nm])
+            return float(np.sum((R - target_R_array) ** 2))
+
+        # 设置边界条件
+        thickness_bounds = [(20.0, 300.0) for _ in range(len(initial_thicknesses))]
+        
+        # 执行BFGS优化
+        result = minimize(
+            objective_function, 
+            initial_thicknesses, 
+            method='L-BFGS-B', 
+            bounds=thickness_bounds, 
+            options={'ftol': 1e-9, 'gtol': 1e-6, 'maxiter': 100}
+        )
+        
+        optimized_thicknesses = result.x.tolist()
+        
+        # 构建优化后的结构（保持材料顺序，更新厚度）
+        optimized_structure = [f"{mat}_{int(round(thk))}" for mat, thk in zip(materials, optimized_thicknesses)]
+        
+        # 计算优化后的R/T光谱
+        wavelengths_um = wavelengths_nm / 1e3
+        opt_result = spectrum(
+            materials=materials,
+            thickness=optimized_thicknesses,
+            pol='u',
+            theta=0,
+            wavelengths=wavelengths_um,
+            nk_dict=nk_dict,
+            substrate='Glass_Substrate',
+            substrate_thick=500000.0
+        )
+        
+        L = len(wavelengths_nm)
+        R_values = opt_result[:L]
+        T_values = opt_result[L:]
+
+        return JsonResponse({
+            'ok': True,
+            'R': R_values,
+            'T': T_values,
+            'wavelengths': wavelengths_nm.tolist(),
+            'materials': materials,
+            'initial_thicknesses': initial_thicknesses,
+            'optimized_thicknesses': [float(t) for t in optimized_thicknesses],
+            'optimized_structure': optimized_structure,
+            'optimization_success': result.success,
+            'optimization_iterations': int(result.nit),
+            'final_objective': float(result.fun)
+        }, json_dumps_params={'ensure_ascii': False})
+
+    except ImportError:
+        return JsonResponse({'ok': False, 'error': 'scipy.optimize not available'}, status=500)
+    except Exception as e:
+        import traceback
+        return JsonResponse({'ok': False, 'error': str(e), 'traceback': traceback.format_exc()}, status=500)

@@ -118,7 +118,12 @@
             <!-- Top-kp 列表展示 -->
             <va-divider class="my-3" />
             <va-card outlined>
-              <va-card-title>Top-kp 采样结果</va-card-title>
+              <va-card-title>
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                  <span>Top-kp 采样结果</span>
+                  <va-switch v-model="enableOptimization" label="优化结果" dense />
+                </div>
+              </va-card-title>
               <va-card-content>
                 <div v-if="sampleTable.length === 0" class="text-muted">暂无结果，请点击“提交到后端计算”。</div>
 
@@ -160,8 +165,14 @@
                   <!-- R/T 光谱图 -->
                   <div v-if="bestSpectrum && bestOne" class="mt-3">
                     <div class="block-title">R/T 光谱（TMM计算）</div>
+                    <div v-if="enableOptimization && !optimizedSpectrum" class="mb-2" style="color: #6b7280; font-size: 12px;">
+                      正在优化膜系结构...
+                    </div>
                     <div style="width: 100%; overflow-x: auto;">
                       <canvas ref="spectrumCanvas" class="spectrum-canvas"></canvas>
+                    </div>
+                    <div v-if="optimizedSpectrum" class="mt-2" style="font-size: 12px; color: #059669;">
+                      <div>优化后结构：{{ optimizedSpectrum.optimized_structure.join(', ') }}</div>
                     </div>
                   </div>
                   <div v-else-if="bestOne" class="mt-2" style="color: #6b7280; font-size: 12px;">
@@ -674,9 +685,10 @@ function drawSpectrumChart(): void {
   const R = bestSpectrum.value.R
   const T = bestSpectrum.value.T
   
-  // 绘制R曲线（蓝色）
+  // 绘制初始R曲线（蓝色，虚线）
   ctx.strokeStyle = '#1f77b4'  // 蓝色
   ctx.lineWidth = 2
+  ctx.setLineDash([5, 5])  // 虚线
   ctx.beginPath()
   for (let i = 0; i < wavelengths.length; i++) {
     const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
@@ -686,7 +698,7 @@ function drawSpectrumChart(): void {
   }
   ctx.stroke()
   
-  // 绘制T曲线（橙色）
+  // 绘制初始T曲线（橙色，虚线）
   ctx.strokeStyle = '#ff7f0e'  // 橙色
   ctx.lineWidth = 2
   ctx.beginPath()
@@ -697,39 +709,98 @@ function drawSpectrumChart(): void {
     else ctx.lineTo(x, y)
   }
   ctx.stroke()
+  ctx.setLineDash([])  // 恢复实线
+  
+  // 如果启用了优化且有优化结果，绘制优化后的曲线
+  if (enableOptimization.value && optimizedSpectrum.value) {
+    const optR = optimizedSpectrum.value.R
+    const optT = optimizedSpectrum.value.T
+    
+    // 绘制优化后的R曲线（深蓝色，实线）
+    ctx.strokeStyle = '#0d47a1'  // 深蓝色
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    for (let i = 0; i < wavelengths.length; i++) {
+      const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
+      const y = topPad + plotH * (1 - (optR[i] * 100) / 100)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+    
+    // 绘制优化后的T曲线（深橙色，实线）
+    ctx.strokeStyle = '#e65100'  // 深橙色
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    for (let i = 0; i < wavelengths.length; i++) {
+      const x = leftPad + plotW * ((wavelengths[i] - wlMin) / (wlMax - wlMin))
+      const y = topPad + plotH * (1 - (optT[i] * 100) / 100)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.stroke()
+  }
   
   // 绘制图例
-  const legendX = leftPad + plotW - 150
+  const legendX = leftPad + plotW - 180
+  const legendHeight = enableOptimization.value && optimizedSpectrum.value ? 90 : 50
   const legendY = topPad + 20
   ctx.fillStyle = '#ffffff'
-  ctx.fillRect(legendX - 5, legendY - 5, 145, 50)
+  ctx.fillRect(legendX - 5, legendY - 5, 175, legendHeight)
   ctx.strokeStyle = '#cccccc'
   ctx.lineWidth = 1
-  ctx.strokeRect(legendX - 5, legendY - 5, 145, 50)
+  ctx.strokeRect(legendX - 5, legendY - 5, 175, legendHeight)
   
   ctx.font = '11px Arial'
   ctx.textAlign = 'left'
   ctx.textBaseline = 'middle'
   
-  // R图例
+  // 初始R图例（虚线）
   ctx.strokeStyle = '#1f77b4'
   ctx.lineWidth = 2
+  ctx.setLineDash([5, 5])
   ctx.beginPath()
   ctx.moveTo(legendX, legendY + 10)
   ctx.lineTo(legendX + 30, legendY + 10)
   ctx.stroke()
+  ctx.setLineDash([])
   ctx.fillStyle = '#000000'
-  ctx.fillText('R (%) - Incoherent', legendX + 35, legendY + 10)
+  ctx.fillText('R (%) - 初始', legendX + 35, legendY + 10)
   
-  // T图例
+  // 初始T图例（虚线）
   ctx.strokeStyle = '#ff7f0e'
   ctx.lineWidth = 2
+  ctx.setLineDash([5, 5])
   ctx.beginPath()
   ctx.moveTo(legendX, legendY + 30)
   ctx.lineTo(legendX + 30, legendY + 30)
   ctx.stroke()
+  ctx.setLineDash([])
   ctx.fillStyle = '#000000'
-  ctx.fillText('T (%) - Incoherent', legendX + 35, legendY + 30)
+  ctx.fillText('T (%) - 初始', legendX + 35, legendY + 30)
+  
+  // 如果启用了优化，添加优化后的图例
+  if (enableOptimization.value && optimizedSpectrum.value) {
+    // 优化后R图例（实线）
+    ctx.strokeStyle = '#0d47a1'
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    ctx.moveTo(legendX, legendY + 50)
+    ctx.lineTo(legendX + 30, legendY + 50)
+    ctx.stroke()
+    ctx.fillStyle = '#000000'
+    ctx.fillText('R (%) - 优化后', legendX + 35, legendY + 50)
+    
+    // 优化后T图例（实线）
+    ctx.strokeStyle = '#e65100'
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    ctx.moveTo(legendX, legendY + 70)
+    ctx.lineTo(legendX + 30, legendY + 70)
+    ctx.stroke()
+    ctx.fillStyle = '#000000'
+    ctx.fillText('T (%) - 优化后', legendX + 35, legendY + 70)
+  }
 }
 
 function drawPlots (): void {
@@ -817,7 +888,9 @@ const sampleTable = ref<SampleItem[]>([])
 const bestOne = ref<BestItem | null>(null)
 // 最佳膜系的TMM计算结果
 const bestSpectrum = ref<{ R: number[]; T: number[] } | null>(null)
+const optimizedSpectrum = ref<{ R: number[]; T: number[]; optimized_structure: string[] } | null>(null)
 const spectrumCanvas = ref<HTMLCanvasElement | null>(null)
+const enableOptimization = ref<boolean>(false)
 
 // 监听bestSpectrum变化，确保图表绘制
 watch(bestSpectrum, () => {
@@ -831,6 +904,20 @@ watch(bestSpectrum, () => {
     })
   }
 }, { deep: true })
+
+// 监听优化开关变化
+watch(enableOptimization, (newVal) => {
+  if (newVal && bestOne.value?.structure && bestOne.value.structure.length > 0) {
+    // 开关打开时，执行优化
+    optimizeBestStructure(bestOne.value.structure)
+  } else {
+    // 开关关闭时，清除优化结果
+    optimizedSpectrum.value = null
+    if (spectrumCanvas.value && bestSpectrum.value) {
+      drawSpectrumChart()
+    }
+  }
+})
 
 // localStorage 键名
 const STORAGE_KEY = 'optogpt_results'
@@ -942,8 +1029,13 @@ async function runBackend (): Promise<void> {
     // 如果有最佳结果，计算其TMM光谱
     if (bestOne.value?.structure && bestOne.value.structure.length > 0) {
       calculateBestSpectrum(bestOne.value.structure)
+      // 如果优化开关已打开，执行优化
+      if (enableOptimization.value) {
+        optimizeBestStructure(bestOne.value.structure)
+      }
     } else {
       bestSpectrum.value = null
+      optimizedSpectrum.value = null
     }
 
     // 保存结果到 localStorage（仅在成功时保存）
@@ -959,6 +1051,7 @@ async function runBackend (): Promise<void> {
     sampleTable.value = []
     bestOne.value = null
     bestSpectrum.value = null
+    optimizedSpectrum.value = null
     // 错误时不保存结果，但可以保留之前成功的结果
   } finally {
     clearTimeout(timer)
@@ -1011,6 +1104,60 @@ async function calculateBestSpectrum(structure: string[]) {
   } catch (err: any) {
     console.error('[calculate-spectrum] 计算失败:', err)
     bestSpectrum.value = null
+  }
+}
+
+/* ---------- 优化最佳膜系 ---------- */
+async function optimizeBestStructure(structure: string[]) {
+  if (!structure || structure.length === 0) {
+    optimizedSpectrum.value = null
+    return
+  }
+  
+  try {
+    console.log('[optimize] 开始优化膜系结构:', structure)
+    const resp = await fetch('/api/optogpt/optimize-structure/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ 
+        structure,
+        target_R: R_target.value,
+        target_T: T_target.value,
+        wavelengths: lamNm.value
+      }),
+      credentials: 'omit',
+    })
+    
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '')
+      console.error('[optimize] 请求失败:', resp.status, text)
+      optimizedSpectrum.value = null
+      return
+    }
+    
+    const json = await resp.json()
+    if (json.ok && json.R && json.T && json.optimized_structure) {
+      console.log('[optimize] 优化成功')
+      optimizedSpectrum.value = { 
+        R: json.R, 
+        T: json.T,
+        optimized_structure: json.optimized_structure
+      }
+      // 重新绘制图表
+      nextTick().then(() => {
+        setTimeout(() => {
+          if (spectrumCanvas.value && bestSpectrum.value) {
+            drawSpectrumChart()
+          }
+        }, 100)
+      })
+    } else {
+      console.error('[optimize] 返回格式错误:', json)
+      optimizedSpectrum.value = null
+    }
+  } catch (err: any) {
+    console.error('[optimize] 优化失败:', err)
+    optimizedSpectrum.value = null
   }
 }
 
