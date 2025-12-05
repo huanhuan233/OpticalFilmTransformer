@@ -160,43 +160,40 @@
                   <div class="best-title">最佳（TFCalc）</div>
                   <div>来源：<b>{{ bestOne?.source ?? 'N/A' }}</b>；分数：<b>{{ bestOne?.score !== undefined ? n6(bestOne!.score!) : 'N/A' }}</b></div>
                   <div class="mono mt-1">{{ (bestOne?.structure ?? []).join(', ') }}</div>
-                  <!-- R/T 光谱图 -->
-                  <div v-if="bestSpectrum && bestOne" class="mt-3">
-                    <div class="block-title">R/T 光谱（TMM计算）</div>
-                    <div v-if="enableOptimization && !optimizedSpectrum" class="mb-2" style="color: #6b7280; font-size: 12px;">
-                      正在优化膜系结构...
-                    </div>
-                    <div style="display: flex; gap: 16px;">
-                      <div style="flex: 1; overflow-x: auto;">
-                        <canvas 
-                          ref="spectrumCanvas" 
-                          class="spectrum-canvas" 
-                          @mousemove="onCanvasMouseMove" 
-                          @mouseleave="onCanvasMouseLeave"
-                        ></canvas>
-                        <div v-if="hoveredCurve" class="mt-2" style="font-size: 12px; color: #059669; text-align: center;">
-                          {{ hoveredCurve }}
-                        </div>
-                      </div>
-                      <div ref="legendContainer" class="spectrum-legend"></div>
-                    </div>
-                    <!-- 显示所有优化后的结构 -->
-                    <div v-if="enableOptimization" class="mt-2" style="font-size: 12px;">
-                      <!-- 最佳结果的优化后结构 -->
-                      <div v-if="optimizedSpectrum" style="color: #059669; margin-bottom: 8px;">
-                        <div><b>最佳-优化后结构：</b>{{ optimizedSpectrum.optimized_structure.join(', ') }}</div>
-                      </div>
-                      <!-- 选中采样结果的优化后结构 -->
-                      <template v-for="sampleIdx in selectedSamples" :key="sampleIdx">
-                        <div v-if="getOptimizedStructure(sampleIdx)" style="color: #059669; margin-bottom: 8px;">
-                          <div><b>#{{ String(sampleIdx).padStart(2, '0') }}-优化后结构：</b>{{ getOptimizedStructure(sampleIdx) }}</div>
-                        </div>
-                      </template>
-                    </div>
+                </div>
+                
+                <!-- R/T 光谱图 -->
+                <div v-if="selectedSamples.length > 0" class="mt-3">
+                  <div class="block-title">R/T 光谱（TMM计算）</div>
+                  <div v-if="enableOptimization && hasOptimizingSamples" class="mb-2" style="color: #6b7280; font-size: 12px;">
+                    正在优化膜系结构...
                   </div>
-                  <div v-else-if="bestOne" class="mt-2" style="color: #6b7280; font-size: 12px;">
-                    正在计算R/T光谱...
+                  <div style="display: flex; gap: 16px;">
+                    <div style="flex: 1; overflow-x: auto;">
+                      <canvas 
+                        ref="spectrumCanvas" 
+                        class="spectrum-canvas" 
+                        @mousemove="onCanvasMouseMove" 
+                        @mouseleave="onCanvasMouseLeave"
+                      ></canvas>
+                      <div v-if="hoveredCurve" class="mt-2" style="font-size: 12px; color: #059669; text-align: center;">
+                        {{ hoveredCurve }}
+                      </div>
+                    </div>
+                    <div ref="legendContainer" class="spectrum-legend"></div>
                   </div>
+                  <!-- 显示所有优化后的结构 -->
+                  <div v-if="enableOptimization" class="mt-2" style="font-size: 12px;">
+                    <!-- 选中采样结果的优化后结构 -->
+                    <template v-for="sampleIdx in selectedSamples" :key="sampleIdx">
+                      <div v-if="getOptimizedStructure(sampleIdx)" style="color: #059669; margin-bottom: 8px;">
+                        <div><b>#{{ String(sampleIdx).padStart(2, '0') }}-优化后结构：</b>{{ getOptimizedStructure(sampleIdx) }}</div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+                <div v-else class="mt-3" style="color: #9ca3af; font-style: italic; text-align: center; padding: 40px;">
+                  请至少勾选一个采样结果
                 </div>
               </va-card-content>
             </va-card>
@@ -607,7 +604,11 @@ function drawLine (ctx: CanvasRenderingContext2D, xs: number[], ys: number[]) {
 
 /* ---------- 绘制R/T光谱图（支持多结果显示） ---------- */
 function drawSpectrumChart(): void {
-  if (!spectrumCanvas.value || !bestSpectrum.value) return
+  if (!spectrumCanvas.value) return
+  
+  // 检查是否有选中的采样结果
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  if (samples.length === 0) return
   
   const c = spectrumCanvas.value
   const ctx = c.getContext('2d') as CanvasRenderingContext2D
@@ -684,24 +685,12 @@ function drawSpectrumChart(): void {
   ctx.fillText('Percent (%)', 0, 0)
   ctx.restore()
   
-  // 绘制最佳结果的初始曲线
-  const bestColor = colorPalette[0]
-  drawCurve(ctx, bestSpectrum.value.R, bestSpectrum.value.T, wavelengths, wlMin, wlMax, 
-            leftPad, topPad, plotW, plotH, bestColor.R, bestColor.T, true, '最佳-初始')
-  
-  // 绘制最佳结果的优化后曲线
-  if (enableOptimization.value && optimizedSpectrum.value) {
-    drawCurve(ctx, optimizedSpectrum.value.R, optimizedSpectrum.value.T, wavelengths, wlMin, wlMax,
-              leftPad, topPad, plotW, plotH, bestColor.R, bestColor.T, false, '最佳-优化后')
-  }
-  
   // 绘制选中采样结果的曲线
-  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
   samples.forEach((sampleIdx, colorIdx) => {
     const spectrum = sampleSpectra.value.get(sampleIdx)
     if (!spectrum) return
     
-    const color = colorPalette[(colorIdx + 1) % colorPalette.length]
+    const color = colorPalette[colorIdx % colorPalette.length]
     const label = `#${String(sampleIdx).padStart(2, '0')}`
     
     // 绘制初始曲线
@@ -759,20 +748,13 @@ function updateLegend() {
   
   const items: Array<{ label: string; colorR: string; colorT: string; isDashed: boolean }> = []
   
-  // 最佳结果
-  const bestColor = colorPalette[0]
-  items.push({ label: '最佳-初始', colorR: bestColor.R, colorT: bestColor.T, isDashed: true })
-  if (enableOptimization.value && optimizedSpectrum.value) {
-    items.push({ label: '最佳-优化后', colorR: bestColor.R, colorT: bestColor.T, isDashed: false })
-  }
-  
   // 选中的采样结果
   const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
   samples.forEach((sampleIdx, colorIdx) => {
     const spectrum = sampleSpectra.value.get(sampleIdx)
     if (!spectrum) return
     
-    const color = colorPalette[(colorIdx + 1) % colorPalette.length]
+    const color = colorPalette[colorIdx % colorPalette.length]
     const label = `#${String(sampleIdx).padStart(2, '0')}`
     
     if (spectrum.initial) {
@@ -803,7 +785,10 @@ function updateLegend() {
 }
 
 function onCanvasMouseMove(event: MouseEvent) {
-  if (!spectrumCanvas.value || !bestSpectrum.value) return
+  if (!spectrumCanvas.value) return
+  
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  if (samples.length === 0) return
   
   const rect = spectrumCanvas.value.getBoundingClientRect()
   const x = (event.clientX - rect.left) * (devicePixelRatio || 1)
@@ -837,47 +822,7 @@ function onCanvasMouseMove(event: MouseEvent) {
   let minDist = Infinity
   let closestCurve: string | null = null
   
-  // 检查最佳结果的曲线
-  if (bestSpectrum.value) {
-    const bestR = bestSpectrum.value.R[clampedIdx] * 100
-    const bestT = bestSpectrum.value.T[clampedIdx] * 100
-    const bestRY = topPad + plotH * (1 - bestR / 100)
-    const bestTY = topPad + plotH * (1 - bestT / 100)
-    
-    const distR = Math.abs(y - bestRY)
-    const distT = Math.abs(y - bestTY)
-    
-    if (distR < minDist && distR < 20) {
-      minDist = distR
-      closestCurve = '最佳-初始 R'
-    }
-    if (distT < minDist && distT < 20) {
-      minDist = distT
-      closestCurve = '最佳-初始 T'
-    }
-    
-    if (enableOptimization.value && optimizedSpectrum.value) {
-      const optR = optimizedSpectrum.value.R[clampedIdx] * 100
-      const optT = optimizedSpectrum.value.T[clampedIdx] * 100
-      const optRY = topPad + plotH * (1 - optR / 100)
-      const optTY = topPad + plotH * (1 - optT / 100)
-      
-      const distOptR = Math.abs(y - optRY)
-      const distOptT = Math.abs(y - optTY)
-      
-      if (distOptR < minDist && distOptR < 20) {
-        minDist = distOptR
-        closestCurve = '最佳-优化后 R'
-      }
-      if (distOptT < minDist && distOptT < 20) {
-        minDist = distOptT
-        closestCurve = '最佳-优化后 T'
-      }
-    }
-  }
-  
   // 检查选中采样结果的曲线
-  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
   samples.forEach(sampleIdx => {
     const spectrum = sampleSpectra.value.get(sampleIdx)
     const label = `#${String(sampleIdx).padStart(2, '0')}`
@@ -963,7 +908,8 @@ function safeDraw () {
   requestAnimationFrame(() => { 
     nextTick().then(() => { 
       if (rtCanvas.value && wCanvas.value) drawPlots()
-      if (spectrumCanvas.value && bestSpectrum.value) {
+      const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+      if (spectrumCanvas.value && samples.length > 0) {
         drawSpectrumChart()
         updateLegend()
       }
@@ -1026,6 +972,15 @@ const sampleSpectra = ref<Map<number, {
 }>>(new Map())
 const hoveredCurve = ref<string | null>(null)
 
+// 检查是否有正在优化的采样结果
+const hasOptimizingSamples = computed(() => {
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  return samples.some(sampleIdx => {
+    const spectrum = sampleSpectra.value.get(sampleIdx)
+    return spectrum && enableOptimization.value && !spectrum.optimized
+  })
+})
+
 // 颜色方案
 const colorPalette = [
   { R: '#1f77b4', T: '#ff7f0e' },  // 最佳结果
@@ -1038,13 +993,15 @@ const colorPalette = [
 ]
 const enableOptimization = ref<boolean>(false)
 
-// 监听bestSpectrum变化，确保图表绘制
-watch(bestSpectrum, () => {
-  if (bestSpectrum.value) {
+// 监听selectedSamples变化，确保图表绘制
+watch(selectedSamples, () => {
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  if (samples.length > 0) {
     nextTick().then(() => {
       setTimeout(() => {
-        if (spectrumCanvas.value && bestSpectrum.value) {
+        if (spectrumCanvas.value) {
           drawSpectrumChart()
+          updateLegend()
         }
       }, 100)
     })
@@ -1080,9 +1037,28 @@ function loadResultsFromStorage() {
     if (data.sampleTable) sampleTable.value = data.sampleTable
     if (data.bestOne) {
       bestOne.value = data.bestOne
-      // 恢复时也计算光谱
-      if (data.bestOne?.structure && data.bestOne.structure.length > 0) {
-        calculateBestSpectrum(data.bestOne.structure)
+      
+      // 找到最佳结果对应的索引并自动选中
+      selectedSamples.value = []
+      if (bestOne.value?.structure && sampleTable.value.length > 0) {
+        // 在sampleTable中查找与最佳结果匹配的项
+        const bestIndex = sampleTable.value.findIndex(s => {
+          if (!s.structure || !bestOne.value?.structure) return false
+          if (s.structure.length !== bestOne.value.structure.length) return false
+          return s.structure.every((token, i) => token === bestOne.value!.structure![i])
+        })
+        
+        if (bestIndex >= 0) {
+          // 找到匹配项，自动选中
+          selectedSamples.value = [bestIndex]
+          // 计算该采样结果的光谱
+          const sample = sampleTable.value[bestIndex]
+          if (sample && sample.structure) {
+            sampleSpectra.value.set(bestIndex, { initial: null, optimized: null })
+            // 异步计算光谱
+            calculateSampleSpectrum(bestIndex, sample.structure)
+          }
+        }
       }
     }
     return true
@@ -1098,6 +1074,78 @@ function clearSavedResults() {
     localStorage.removeItem(STORAGE_KEY)
   } catch (e) {
     console.warn('[Storage] 清除结果失败:', e)
+  }
+}
+
+// 优化采样结果的结构
+async function optimizeSampleStructure(sampleIdx: number, structure: string[]) {
+  try {
+    const resp = await fetch('/api/optogpt/optimize-structure/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ 
+        structure,
+        target_R: R_target.value,
+        target_T: T_target.value,
+        wavelengths: lamNm.value
+      }),
+      credentials: 'omit',
+    })
+    
+    if (resp.ok) {
+      const json = await resp.json()
+      if (json.ok && json.R && json.T && json.optimized_structure) {
+        const spectrum = sampleSpectra.value.get(sampleIdx)
+        if (spectrum) {
+          spectrum.optimized = { 
+            R: json.R, 
+            T: json.T,
+            optimized_structure: json.optimized_structure
+          }
+          drawSpectrumChart()
+          updateLegend()
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[sample-${sampleIdx}] 优化失败:`, err)
+  }
+}
+
+// 计算采样结果的光谱（辅助函数）
+async function calculateSampleSpectrum(sampleIdx: number, structure: string[]) {
+  if (!structure || structure.length === 0) return
+  
+  // 初始化该采样结果的光谱数据
+  if (!sampleSpectra.value.has(sampleIdx)) {
+    sampleSpectra.value.set(sampleIdx, { initial: null, optimized: null })
+  }
+  
+  try {
+    const resp = await fetch('/api/optogpt/calculate-spectrum/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ structure }),
+      credentials: 'omit',
+    })
+    
+    if (resp.ok) {
+      const json = await resp.json()
+      if (json.ok && json.R && json.T) {
+        const spectrum = sampleSpectra.value.get(sampleIdx)!
+        spectrum.initial = { R: json.R, T: json.T }
+        
+        // 如果优化开关打开，也计算优化后的光谱
+        if (enableOptimization.value) {
+          await optimizeSampleStructure(sampleIdx, structure)
+        }
+        
+        drawSpectrumChart()
+        updateLegend()
+      }
+    }
+  } catch (err: any) {
+    console.error(`[sample-${sampleIdx}] 计算光谱失败:`, err)
   }
 }
 
@@ -1149,7 +1197,7 @@ async function runBackend (): Promise<void> {
       sampleTable.value = normalized
       bestOne.value = best
     } else {
-      // 兼容“仅返回最优”的老格式
+      // 兼容"仅返回最优"的老格式
       sampleTable.value = json.structure
         ? [{ idx: 0, tf: json.tf_score ?? Number.NaN, structure: json.structure }]
         : []
@@ -1159,16 +1207,27 @@ async function runBackend (): Promise<void> {
     }
     // ========= /归一化 =========
 
-    // 如果有最佳结果，计算其TMM光谱
-    if (bestOne.value?.structure && bestOne.value.structure.length > 0) {
-      calculateBestSpectrum(bestOne.value.structure)
-      // 如果优化开关已打开，执行优化
-      if (enableOptimization.value) {
-        optimizeBestStructure(bestOne.value.structure)
+    // 找到最佳结果对应的索引并自动选中
+    selectedSamples.value = []
+    if (bestOne.value?.structure && sampleTable.value.length > 0) {
+      // 在sampleTable中查找与最佳结果匹配的项
+      const bestIndex = sampleTable.value.findIndex(s => {
+        if (!s.structure || !bestOne.value?.structure) return false
+        if (s.structure.length !== bestOne.value.structure.length) return false
+        return s.structure.every((token, i) => token === bestOne.value!.structure![i])
+      })
+      
+      if (bestIndex >= 0) {
+        // 找到匹配项，自动选中
+        selectedSamples.value = [bestIndex]
+        // 计算该采样结果的光谱
+        const sample = sampleTable.value[bestIndex]
+        if (sample && sample.structure) {
+          sampleSpectra.value.set(bestIndex, { initial: null, optimized: null })
+          // 异步计算光谱
+          calculateSampleSpectrum(bestIndex, sample.structure)
+        }
       }
-    } else {
-      bestSpectrum.value = null
-      optimizedSpectrum.value = null
     }
 
     // 保存结果到 localStorage（仅在成功时保存）
@@ -1185,6 +1244,8 @@ async function runBackend (): Promise<void> {
     bestOne.value = null
     bestSpectrum.value = null
     optimizedSpectrum.value = null
+    selectedSamples.value = []
+    sampleSpectra.value.clear()
     // 错误时不保存结果，但可以保留之前成功的结果
   } finally {
     clearTimeout(timer)
@@ -1310,38 +1371,7 @@ async function onSampleSelectionChange(sampleIdx: number, checked: boolean) {
     const sample = sampleTable.value[sampleIdx]
     if (!sample || !sample.structure) return
     
-    // 初始化该采样结果的光谱数据
-    if (!sampleSpectra.value.has(sampleIdx)) {
-      sampleSpectra.value.set(sampleIdx, { initial: null, optimized: null })
-    }
-    
-    // 计算初始光谱
-    try {
-      const resp = await fetch('/api/optogpt/calculate-spectrum/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ structure: sample.structure }),
-        credentials: 'omit',
-      })
-      
-      if (resp.ok) {
-        const json = await resp.json()
-        if (json.ok && json.R && json.T) {
-          const spectrum = sampleSpectra.value.get(sampleIdx)!
-          spectrum.initial = { R: json.R, T: json.T }
-          
-          // 如果优化开关打开，也计算优化后的光谱
-          if (enableOptimization.value) {
-            await optimizeSampleStructure(sampleIdx, sample.structure)
-          }
-          
-          drawSpectrumChart()
-          updateLegend()
-        }
-      }
-    } catch (err: any) {
-      console.error(`[sample-${sampleIdx}] 计算光谱失败:`, err)
-    }
+    await calculateSampleSpectrum(sampleIdx, sample.structure)
   } else {
     // 取消选中：从列表中移除
     const index = selectedSamples.value.indexOf(sampleIdx)
@@ -1352,40 +1382,6 @@ async function onSampleSelectionChange(sampleIdx: number, checked: boolean) {
     sampleSpectra.value.delete(sampleIdx)
     drawSpectrumChart()
     updateLegend()
-  }
-}
-
-async function optimizeSampleStructure(sampleIdx: number, structure: string[]) {
-  try {
-    const resp = await fetch('/api/optogpt/optimize-structure/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ 
-        structure,
-        target_R: R_target.value,
-        target_T: T_target.value,
-        wavelengths: lamNm.value
-      }),
-      credentials: 'omit',
-    })
-    
-    if (resp.ok) {
-      const json = await resp.json()
-      if (json.ok && json.R && json.T && json.optimized_structure) {
-        const spectrum = sampleSpectra.value.get(sampleIdx)
-        if (spectrum) {
-          spectrum.optimized = { 
-            R: json.R, 
-            T: json.T,
-            optimized_structure: json.optimized_structure
-          }
-          drawSpectrumChart()
-          updateLegend()
-        }
-      }
-    }
-  } catch (err: any) {
-    console.error(`[sample-${sampleIdx}] 优化失败:`, err)
   }
 }
 
@@ -1400,24 +1396,18 @@ function getOptimizedStructure(sampleIdx: number): string | null {
 
 // 监听优化开关变化，更新所有选中采样结果的优化状态
 watch(enableOptimization, async (newVal) => {
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  
   if (newVal) {
     // 为所有选中的采样结果执行优化
-    const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
     for (const sampleIdx of samples) {
       const sample = sampleTable.value[sampleIdx]
       if (sample?.structure) {
         await optimizeSampleStructure(sampleIdx, sample.structure)
       }
     }
-    
-    // 优化最佳结果
-    if (bestOne.value?.structure) {
-      optimizeBestStructure(bestOne.value.structure)
-    }
   } else {
     // 清除所有优化结果
-    optimizedSpectrum.value = null
-    const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
     samples.forEach(sampleIdx => {
       const spectrum = sampleSpectra.value.get(sampleIdx)
       if (spectrum) spectrum.optimized = null
