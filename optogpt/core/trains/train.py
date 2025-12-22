@@ -276,9 +276,11 @@ def train_I(data, model, criterion, optimizer, configs, DEVICE):
 
         if dev_loss < best_dev_loss:
             best_dev_loss = dev_loss
-            save_checkpoint(model, optimizer, epoch, loss_all, 'saved_models/optogpt/'+save_folder+'/'+save_name+'_best03.pt',  configs)
+            # 保存当前最优模型，后缀标记为 best04
+            save_checkpoint(model, optimizer, epoch, loss_all, 'saved_models/optogpt/'+save_folder+'/'+save_name+'_best07.pt',  configs)
 
-        save_checkpoint(model, optimizer, epoch, loss_all, 'saved_models/optogpt/'+save_folder+'/'+save_name+'_recent03.pt',  configs)
+        # 始终保存最近的模型，后缀标记为 recent04
+        save_checkpoint(model, optimizer, epoch, loss_all, 'saved_models/optogpt/'+save_folder+'/'+save_name+'_recent07.pt',  configs)
             
         print(f">>>>> current best loss: {best_dev_loss}")
         

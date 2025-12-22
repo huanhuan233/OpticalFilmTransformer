@@ -498,8 +498,8 @@ MODEL_INFO: Dict[str, Any] = {}
 try:
    
     DEFAULT_MODEL_PATH = (
-        "/home/sysadmin/WorkSpace/PXY/optogpt/optogpt/saved_models/optogpt/test/"
-        "model_inverse_R_T_S_R_B_LR_WU_L_H_D_F_[2, 0.1, 512, 0.0002, 3000, 6, 8, 512, 2048]_best03.pt"
+        "/data/PXY/optogpt/optogpt/saved_models/optogpt/test/"
+        "model_inverse_R_T_S_R_B_LR_WU_L_H_D_F_[2, 0.05, 1024, 0.0004, 2000, 6, 8, 512, 2048]_best07.pt"
     )
     a = torch.load(DEFAULT_MODEL_PATH, map_location=DEVICE)
     args = a['configs']
@@ -511,7 +511,7 @@ try:
 
 
     # ✅ 用绝对路径（按你的目录）
-    DATASET_DIR = "/home/sysadmin/WorkSpace/PXY/optogpt/optogpt/dataset"
+    DATASET_DIR = "/data/PXY/optogpt/optogpt/dataset"
     TRAIN_FILE = f"{DATASET_DIR}/Structure_train.pkl"
     TRAIN_SPEC_FILE = f"{DATASET_DIR}/Spectrum_train.pkl"
     DEV_FILE = f"{DATASET_DIR}/Structure_dev.pkl"
@@ -533,6 +533,53 @@ except Exception as e:
     MODEL_OK = False
     MODEL_INFO = {'error': f'Model load failed: {e}'}
     print('[ERROR] model load failed:', e)
+
+# ------------------------ JSON 安全数值 -------------------------------
+def safe_float(x, default=0.0):
+    """将数值转换为 JSON 安全的 float；非有限数回退到 default，再不行则 0.0。"""
+    try:
+        v = float(x)
+        if np.isfinite(v):
+            return v
+    except Exception:
+        pass
+    try:
+        v_def = float(default)
+        if np.isfinite(v_def):
+            return v_def
+    except Exception:
+        pass
+    return 0.0
+
+
+def merge_same_material_layers(tokens: list, max_thick: float = 300.0):
+    """
+    将相邻相同材料的层合并厚度；若任一合并后厚度超限则判定无效。
+    返回 (merged_tokens, valid_bool)。
+    """
+    merged = []
+    last_mat = None
+    last_thk = 0.0
+    for tok in tokens:
+        if not tok or "_" not in str(tok):
+            continue
+        mat, thk = str(tok).split("_", 1)
+        try:
+            thk_val = float(thk)
+        except Exception:
+            continue
+        if mat == last_mat:
+            last_thk += thk_val
+            if last_thk > max_thick:
+                return [], False
+            merged[-1] = f"{mat}_{int(round(last_thk))}"
+        else:
+            if thk_val > max_thick:
+                return [], False
+            merged.append(f"{mat}_{int(round(thk_val))}")
+            last_mat = mat
+            last_thk = thk_val
+    return merged, True
 
 # ------------------------ 视图函数 -------------------------------
 @csrf_exempt
@@ -557,6 +604,9 @@ def infer(request: HttpRequest):
 
         # 前端有可能传 tf_params（而不是 tf）
         tf_cfg = body.get('tf') or body.get('tf_params') or {}
+        # Tol 是容差值（tolerance），默认 0.05（5%容差）
+        # 注意：根据新公式，当偏差 = Tol 时，TF 分数 = 1（基准分数）
+        # 所以 Tol=0.05 时，基准分数自动为 1；Tol 不是基准分数本身
         tol = float(tf_cfg.get('tol', tf_cfg.get('Tol', 0.05)))
         try:
             k_exp = int(tf_cfg.get('k', 2))
@@ -564,33 +614,45 @@ def infer(request: HttpRequest):
             k_exp = 2
         weight_mode = (tf_cfg.get('weightMode') or tf_cfg.get('weight_mode') or 'fullband').lower()
 
-        # 如果没直接传 directives_text，就从 rows 组装
-        if not directives_text:
-            lines = []
-            for r in rows_in:
-                # 处理 ch 字段：可能是字符串 'R'/'T'，也可能是对象 {'value': 'R', 'text': 'R'}
+        # 如果没直接传 directives_text，就从 rows 组装；rows 支持 list/dict 混合
+        def parse_row(r):
+            # list/tuple: ['R', 550, 0.2, 1]
+            if isinstance(r, (list, tuple)):
+                ch = str(r[0]).upper() if len(r) > 0 else 'R'
+                lam = float(r[1]) if len(r) > 1 else 550
+                v = float(r[2]) if len(r) > 2 else 0.0
+                w = float(r[3]) if len(r) > 3 else 1.0
+                return ch, lam, v, w
+            # dict: {ch/lam/v/w 或 val}
+            if isinstance(r, dict):
                 ch_raw = r.get('ch', 'R')
                 if isinstance(ch_raw, dict):
                     ch = str(ch_raw.get('value', ch_raw.get('text', 'R'))).upper()
                 else:
                     ch = str(ch_raw).upper()
-                # 处理 lam 字段：可能是数字，也可能是对象 {'value': 550, 'text': '550'}
                 lam_raw = r.get('lam', 550)
                 if isinstance(lam_raw, dict):
                     lam = float(lam_raw.get('value', lam_raw.get('text', 550)))
                 else:
                     lam = float(lam_raw)
-                # 前端可能字段叫 val，也可能叫 v
-                v = r.get('v', r.get('val', 0.0))
+                v_raw = r.get('v', r.get('val', 0.0))
                 try:
-                    v = float(v)
+                    v = float(v_raw)
                 except Exception:
                     v = 0.0
-                w = r.get('w', 1.0)
+                w_raw = r.get('w', 1.0)
                 try:
-                    w = float(w)
+                    w = float(w_raw)
                 except Exception:
                     w = 1.0
+                return ch, lam, v, w
+            # fallback
+            return 'R', 550.0, 0.0, 1.0
+
+        if not directives_text:
+            lines = []
+            for r in rows_in:
+                ch, lam, v, w = parse_row(r)
                 lines.append(f"{ch},{lam},{v},{w}")
             directives_text = "\n".join(lines)
 
@@ -630,10 +692,20 @@ def infer(request: HttpRequest):
             max_len=getattr(args, 'max_len', 22),
             start_symbol='BOS', spec_weights=None, device=DEVICE
         )
-        mae_plain, mae_weight, tf_merit, _ = eval_structure(cleaned_tokens)
-        score_g = tf_merit if np.isfinite(tf_merit) else mae_weight
-        results.append({'idx': -1, 'tag': 'Greedy', 'tf': float(tf_merit), 'structure': cleaned_tokens})
-        best_score, best_struct, best_tag = score_g, cleaned_tokens, 'Greedy'
+        # 合并相邻同材层；若无效则丢弃
+        merged_tokens, valid = merge_same_material_layers(cleaned_tokens)
+        if not valid or not merged_tokens:
+            mae_plain = mae_weight = tf_merit = float('inf')
+        else:
+            mae_plain, mae_weight, tf_merit, _ = eval_structure(merged_tokens)
+        tf_val = safe_float(tf_merit, default=mae_weight)
+        score_g = tf_val if np.isfinite(tf_val) else safe_float(mae_weight, default=0.0)
+        # 只有非空结构才采纳
+        if valid and merged_tokens:
+            results.append({'idx': -1, 'tag': 'Greedy', 'tf': tf_val, 'structure': merged_tokens})
+            best_score, best_struct, best_tag = score_g, merged_tokens, 'Greedy'
+        else:
+            best_score, best_struct, best_tag = float('inf'), [], 'None'
 
         # 读取 Top-kp 数量：优先从 top_kp 读取，如果没有则从 samples 读取（向后兼容），默认 20
         # 限制范围在 5-50 之间
@@ -644,27 +716,44 @@ def infer(request: HttpRequest):
         except Exception:
             SAMPLES = 20
 
-        for kk in range(SAMPLES):
+        # 需要收集有效（非空）样本；为空则跳过继续取，最多尝试 5 倍
+        collected = 0
+        attempt = 0
+        max_attempt = SAMPLES * 5
+        while collected < SAMPLES and attempt < max_attempt:
+            attempt += 1
             struc_k, _ = top_k_n_w(
                 k=10, top_p=0.8, model=model, struc_word_dict=data.struc_word_dict,
                 R_target=R_target, T_target=T_target,
                 max_len=getattr(args, 'max_len', 22),
                 start_symbol='BOS', spec_weights=None, device=DEVICE
             )
-            mae_p, mae_w, tf_m, _ = eval_structure(struc_k)
-            sc = tf_m if np.isfinite(tf_m) else mae_w
-            results.append({'idx': kk, 'tag': f'Sample#{kk:02d}', 'tf': float(tf_m), 'structure': struc_k})
+            # 合并相邻同材层；若无效或为空则跳过
+            merged_tokens, valid = merge_same_material_layers(struc_k)
+            if not valid or not merged_tokens:
+                continue
+            mae_p, mae_w, tf_m, _ = eval_structure(merged_tokens)
+            tf_val = safe_float(tf_m, default=mae_w)
+            sc = tf_val if np.isfinite(tf_val) else safe_float(mae_w, default=0.0)
+            results.append({'idx': collected, 'tag': f'Sample#{collected:02d}', 'tf': tf_val, 'structure': merged_tokens})
+            collected += 1
             if sc < best_score:
-                best_score, best_struct, best_tag = sc, struc_k, f'Sample#{kk:02d}'
+                best_score, best_struct, best_tag = sc, merged_tokens, f'Sample#{collected-1:02d}'
+
+        # 统一在返回前做一次 JSON 安全清洗
+        best_score_safe = safe_float(best_score, default=0.0)
+        for item in results:
+            tfv = safe_float(item.get('tf', 0.0), default=0.0)
+            item['tf'] = tfv
 
         return JsonResponse({
             'ok': True,
             'model': MODEL_INFO,
-            'best': {'source': best_tag, 'score': float(best_score), 'structure': best_struct},
+            'best': {'source': best_tag, 'score': best_score_safe, 'structure': best_struct},
             'samples': results,
             'structure': best_struct,
-            'tf_score': float(best_score),
-        }, json_dumps_params={'ensure_ascii': False})
+            'tf_score': best_score_safe,
+        }, json_dumps_params={'ensure_ascii': False, 'allow_nan': False})
 
     except Exception as e:
         # 把异常信息直接回给前端，便于定位
@@ -768,6 +857,11 @@ def optimize_structure(request: HttpRequest):
         else:
             # 默认目标：最小反射率
             target_R_array = np.zeros_like(wavelengths_nm, dtype=float)
+        # 构建目标透射率；若未提供，则假设 T = 1 - R（忽略吸收）
+        if target_T and len(target_T) == len(wavelengths_nm):
+            target_T_array = np.array(target_T, dtype=float)
+        else:
+            target_T_array = 1.0 - target_R_array
 
         # 使用BFGS优化厚度
         def tmm_reflectance_single(material_list, d_list, wavelength):
@@ -825,8 +919,14 @@ def optimize_structure(request: HttpRequest):
             print(f"[optimize_structure] 优化异常: {e}, 使用初始值")
             optimized_thicknesses = initial_thicknesses
         
-        # 构建优化后的结构（保持材料顺序，更新厚度）
-        optimized_structure = [f"{mat}_{int(round(thk))}" for mat, thk in zip(materials, optimized_thicknesses)]
+        # 构建优化后的结构（保持材料顺序，更新厚度），并合并相邻同材层
+        raw_structure = [f"{mat}_{int(round(thk))}" for mat, thk in zip(materials, optimized_thicknesses)]
+        optimized_structure, structure_valid = merge_same_material_layers(raw_structure)
+        if not structure_valid or not optimized_structure:
+            return JsonResponse({
+                'ok': False,
+                'error': 'Optimized structure invalid after merging adjacent same-material layers (>300nm)',
+            }, status=400, json_dumps_params={'ensure_ascii': False, 'allow_nan': False})
         
         # 计算优化后的R/T光谱
         wavelengths_um = wavelengths_nm / 1e3
@@ -844,35 +944,16 @@ def optimize_structure(request: HttpRequest):
         L = len(wavelengths_nm)
         R_values = opt_result[:L]
         T_values = opt_result[L:]
-        
-        # 计算TF分数（如果提供了目标值和参数）
-        tf_score = None
-        if target_R and len(target_R) == L and target_T and len(target_T) == L:
-            try:
-                # 获取TFCalc参数（从请求中获取，或使用默认值）
-                tf_params = body.get('tf_params', {})
-                N_vec = tf_params.get('N_vec', [1.0] * (L * 2))
-                Tol_vec = tf_params.get('Tol_vec', [0.05] * (L * 2))
-                I_vec = tf_params.get('I_vec', [1.0] * (L * 2))
-                D_vec = tf_params.get('D_vec', [1.0] * (L * 2))
-                k = tf_params.get('k', 2)
-                
-                # 构建spec向量
-                vec_sim = np.concatenate([R_values, T_values])
-                vec_target = np.concatenate([np.array(target_R, dtype=float), np.array(target_T, dtype=float)])
-                
-                # 计算TF分数
-                tf_score = float(tfcalc_merit(
-                    C_vec=vec_sim,
-                    T_vec=vec_target,
-                    N_vec=N_vec,
-                    Tol_vec=Tol_vec,
-                    I=I_vec,
-                    D=D_vec,
-                    k=k
-                ))
-            except Exception as e:
-                print(f"[optimize_structure] 计算TF分数失败: {e}")
+
+        # 计算 TFCalc 评分（默认 k=2, Tol=0.05）
+        target_vec = assemble_spec_vector(target_R_array, target_T_array)
+        sim_vec = assemble_spec_vector(R_values, T_values)
+        N_vec = np.ones_like(target_vec, dtype=np.float64)
+        Tol_vec = np.ones_like(target_vec, dtype=np.float64) * 0.05
+        I_vec = np.ones_like(target_vec, dtype=np.float64)
+        D_vec = np.ones_like(target_vec, dtype=np.float64)
+        tf_score = tfcalc_merit(C_vec=sim_vec, T_vec=target_vec, N_vec=N_vec, Tol_vec=Tol_vec, I=I_vec, D=D_vec, k=2)
+        tf_score_safe = safe_float(tf_score, default=0.0)
 
         return JsonResponse({
             'ok': True,
@@ -883,10 +964,10 @@ def optimize_structure(request: HttpRequest):
             'initial_thicknesses': initial_thicknesses,
             'optimized_thicknesses': [float(t) for t in optimized_thicknesses],
             'optimized_structure': optimized_structure,
+            'tf_score': tf_score_safe,
             'optimization_success': result.success,
             'optimization_iterations': int(result.nit),
-            'final_objective': float(result.fun),
-            'tf_score': tf_score
+            'final_objective': float(result.fun)
         }, json_dumps_params={'ensure_ascii': False})
 
     except ImportError:

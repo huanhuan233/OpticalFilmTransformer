@@ -1,0 +1,30 @@
+{
+  "seeds": 42,
+  "epochs": 200,
+  "ratios": 2,
+  "batch_size": 1024,
+  "dropout": 0.1,
+  "max_lr": 0.0004,
+  "warm_steps": 2000,
+  "smoothing": 0.05,
+  "struc_dim": 91,
+  "spec_dim": 150,
+  "layers": 6,
+  "head_num": 8,
+  "d_model": 512,
+  "d_ff": 2048,
+  "max_len": 22,
+  "save_folder": "test",
+  "save_name": "model_inverse",
+  "spec_type": "R_T",
+  "TRAIN_FILE": "TRAIN_FILE",
+  "TRAIN_SPEC_FILE": "TRAIN_SPEC_FILE",
+  "DEV_FILE": "DEV_FILE",
+  "DEV_SPEC_FILE": "DEV_SPEC_FILE",
+  "struc_index_dict": {
+    "2": "BOS"
+  },
+  "struc_word_dict": {
+    "BOS": 2
+  }
+}

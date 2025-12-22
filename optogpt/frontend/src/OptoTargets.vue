@@ -142,10 +142,7 @@
                         <tr v-for="(s, i) in sampleTable" :key="i">
                             <!-- 用 i 来显示编号 -->
                             <td>#{{ String(i).padStart(2, '0') }}</td>
-                            <td>
-                              <b v-if="enableOptimization && s.optimized_tf !== undefined" style="color: #059669;">{{ n6(s.optimized_tf) }}</b>
-                              <b v-else>{{ n6(s.tf) }}</b>
-                            </td>
+                            <td><b>{{ n6(s.tf) }}</b></td>
                             <td>{{ parseTokens(s.structure).length }}</td>
                             <td class="mono">{{ s.structure.join(', ') }}</td>
                             <td class="center">
@@ -168,10 +165,7 @@
                 <!-- R/T 光谱图 -->
                 <div v-if="selectedSamples.length > 0" class="mt-3">
                   <div class="block-title">R/T 光谱（TMM计算）</div>
-                  <div v-if="optimizationProgress" class="mb-2" style="color: #6b7280; font-size: 12px;">
-                    正在优化膜系结构... ({{ optimizationProgress.current }}/{{ optimizationProgress.total }})
-                  </div>
-                  <div v-else-if="enableOptimization && hasOptimizingSamples" class="mb-2" style="color: #6b7280; font-size: 12px;">
+                  <div v-if="enableOptimization && hasOptimizingSamples" class="mb-2" style="color: #6b7280; font-size: 12px;">
                     正在优化膜系结构...
                   </div>
                   <div style="display: flex; gap: 16px;">
@@ -194,10 +188,6 @@
                     <template v-for="sampleIdx in selectedSamples" :key="sampleIdx">
                       <div v-if="getOptimizedStructure(sampleIdx)" style="color: #059669; margin-bottom: 8px;">
                         <div><b>#{{ String(sampleIdx).padStart(2, '0') }}-优化后结构：</b>{{ getOptimizedStructure(sampleIdx) }}</div>
-                        <div v-if="getOptimizedTFScore(sampleIdx) !== null">
-                          <b>旧TF分数：</b>{{ n6(sampleTable[sampleIdx]?.tf || 0) }} → 
-                          <b>新TF分数：</b>{{ n6(getOptimizedTFScore(sampleIdx)!) }}
-                        </div>
                       </div>
                     </template>
                   </div>
@@ -331,14 +321,7 @@ const API_BASE = (__envBase !== undefined)
 /* ---------- 类型 ---------- */
 type Channel = 'R' | 'T'
 interface Row { id: string; ch: Channel; lam: number; val: number | null; w: number | null }
-interface SampleItem { 
-  idx: number; 
-  tf: number; 
-  structure: string[]; 
-  tag?: string;
-  optimized_structure?: string[];
-  optimized_tf?: number;
-}
+interface SampleItem { idx: number; tf: number; structure: string[]; tag?: string }
 interface BestItem { source?: string; score?: number; structure?: string[] }
 interface BackendResp {
   structure?: string[]; tf_score?: number; mae_weight?: number; error?: string;
@@ -1094,22 +1077,8 @@ function clearSavedResults() {
   }
 }
 
-// 优化结果类型
-interface OptimizationResult {
-  sampleIdx: number
-  success: boolean
-  optimized_structure?: string[]
-  optimized_tf?: number
-  R?: number[]
-  T?: number[]
-  error?: string
-}
-
-// 优化采样结果的结构（带超时，只返回结果，不更新状态）
-async function optimizeSampleStructure(sampleIdx: number, structure: string[], timeoutMs: number = 120000): Promise<OptimizationResult> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
-  
+// 优化采样结果的结构
+async function optimizeSampleStructure(sampleIdx: number, structure: string[]) {
   try {
     const resp = await fetch('/api/optogpt/optimize-structure/', {
       method: 'POST',
@@ -1118,62 +1087,28 @@ async function optimizeSampleStructure(sampleIdx: number, structure: string[], t
         structure,
         target_R: R_target.value,
         target_T: T_target.value,
-        wavelengths: lamNm.value,
-        tf_params: {
-          N_vec: N_vec.value,
-          Tol_vec: Tol_vec.value,
-          I_vec: I_vec.value,
-          D_vec: D_vec.value,
-          k: tfK.value,
-        }
+        wavelengths: lamNm.value
       }),
       credentials: 'omit',
-      signal: controller.signal,
     })
-    
-    clearTimeout(timeoutId)
     
     if (resp.ok) {
       const json = await resp.json()
       if (json.ok && json.R && json.T && json.optimized_structure) {
-        return {
-          sampleIdx,
-          success: true,
-          optimized_structure: json.optimized_structure,
-          optimized_tf: json.tf_score,
-          R: json.R,
-          T: json.T
+        const spectrum = sampleSpectra.value.get(sampleIdx)
+        if (spectrum) {
+          spectrum.optimized = { 
+            R: json.R, 
+            T: json.T,
+            optimized_structure: json.optimized_structure
+          }
+          drawSpectrumChart()
+          updateLegend()
         }
-      } else {
-        return {
-          sampleIdx,
-          success: false,
-          error: '返回数据格式错误'
-        }
-      }
-    } else {
-      const text = await resp.text().catch(() => '')
-      return {
-        sampleIdx,
-        success: false,
-        error: `HTTP ${resp.status}: ${text.slice(0, 100)}`
       }
     }
   } catch (err: any) {
-    clearTimeout(timeoutId)
-    if (err.name === 'AbortError') {
-      return {
-        sampleIdx,
-        success: false,
-        error: `超时 (${timeoutMs}ms)`
-      }
-    } else {
-      return {
-        sampleIdx,
-        success: false,
-        error: err.message || String(err)
-      }
-    }
+    console.error(`[sample-${sampleIdx}] 优化失败:`, err)
   }
 }
 
@@ -1200,7 +1135,10 @@ async function calculateSampleSpectrum(sampleIdx: number, structure: string[]) {
         const spectrum = sampleSpectra.value.get(sampleIdx)!
         spectrum.initial = { R: json.R, T: json.T }
         
-        // 注意：优化由watch(enableOptimization)统一处理，这里不再单独优化
+        // 如果优化开关打开，也计算优化后的光谱
+        if (enableOptimization.value) {
+          await optimizeSampleStructure(sampleIdx, structure)
+        }
         
         drawSpectrumChart()
         updateLegend()
@@ -1456,116 +1394,20 @@ function getOptimizedStructure(sampleIdx: number): string | null {
   return null
 }
 
-/* ---------- 获取优化后的TF分数 ---------- */
-function getOptimizedTFScore(sampleIdx: number): number | null {
-  const sample = sampleTable.value[sampleIdx]
-  if (sample?.optimized_tf !== undefined) {
-    return sample.optimized_tf
-  }
-  return null
-}
-
-// 优化进度状态
-const optimizationProgress = ref<{ current: number; total: number } | null>(null)
-
-// 监听优化开关变化，只优化选中的采样结果
+// 监听优化开关变化，更新所有选中采样结果的优化状态
 watch(enableOptimization, async (newVal) => {
+  const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
+  
   if (newVal) {
-    const selected = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
-    if (selected.length === 0) {
-      console.warn('没有选中的采样结果，无法优化')
-      return
-    }
-    
-    optimizationProgress.value = { current: 0, total: selected.length }
-    
-    // 步骤1: 只优化选中的采样结果，存储到队列
-    const tasks: Array<{ index: number; structure: string[] }> = []
-    selected.forEach(sampleIdx => {
+    // 为所有选中的采样结果执行优化
+    for (const sampleIdx of samples) {
       const sample = sampleTable.value[sampleIdx]
       if (sample?.structure) {
-        tasks.push({ index: sampleIdx, structure: sample.structure })
+        await optimizeSampleStructure(sampleIdx, sample.structure)
       }
-    })
-    
-    // 优化结果队列
-    const optimizationQueue: OptimizationResult[] = []
-    const concurrency = 1 // 串行执行，避免后端过载和超时（复杂结构需要更多时间）
-    
-    // 分批执行优化，存储结果到队列
-    for (let i = 0; i < tasks.length; i += concurrency) {
-      const batch = tasks.slice(i, i + concurrency)
-      const batchPromises = batch.map(({ index, structure }) => 
-        optimizeSampleStructure(index, structure, 120000)
-          .then((result) => {
-            optimizationQueue.push(result)
-            optimizationProgress.value = { 
-              current: optimizationQueue.length, 
-              total: selected.length
-            }
-            return result
-          })
-          .catch((err) => {
-            optimizationQueue.push({
-              sampleIdx: index,
-              success: false,
-              error: err.message || String(err)
-            })
-            optimizationProgress.value = { 
-              current: optimizationQueue.length, 
-              total: selected.length
-            }
-            return null
-          })
-      )
-      
-      // 等待当前批次完成
-      await Promise.allSettled(batchPromises)
     }
-    
-    // 步骤2: 所有优化完成后，统一更新sampleTable和sampleSpectra
-    optimizationQueue.forEach(result => {
-      if (result.success && result.optimized_structure) {
-        // 更新sampleTable（只更新优化后的数据，不改变原始数据）
-        const sample = sampleTable.value[result.sampleIdx]
-        if (sample) {
-          sample.optimized_structure = result.optimized_structure
-          if (result.optimized_tf !== undefined && result.optimized_tf !== null) {
-            sample.optimized_tf = result.optimized_tf
-          }
-        }
-        
-        // 更新sampleSpectra
-        if (!sampleSpectra.value.has(result.sampleIdx)) {
-          sampleSpectra.value.set(result.sampleIdx, { initial: null, optimized: null })
-        }
-        const spectrum = sampleSpectra.value.get(result.sampleIdx)
-        if (spectrum && result.R && result.T) {
-          spectrum.optimized = {
-            R: result.R,
-            T: result.T,
-            optimized_structure: result.optimized_structure
-          }
-        }
-      } else {
-        console.warn(`[sample-${result.sampleIdx}] 优化失败:`, result.error)
-      }
-    })
-    
-    // 清除进度状态
-    optimizationProgress.value = null
-    
-    // 更新显示（不重新排序）
-    drawSpectrumChart()
-    updateLegend()
   } else {
     // 清除所有优化结果
-    optimizationProgress.value = null
-    sampleTable.value.forEach(sample => {
-      delete sample.optimized_structure
-      delete sample.optimized_tf
-    })
-    const samples = Array.isArray(selectedSamples.value) ? selectedSamples.value : []
     samples.forEach(sampleIdx => {
       const spectrum = sampleSpectra.value.get(sampleIdx)
       if (spectrum) spectrum.optimized = null
@@ -1574,74 +1416,6 @@ watch(enableOptimization, async (newVal) => {
     updateLegend()
   }
 })
-
-// 重新排序并选中新的最佳结果
-async function reorderAndSelectBest() {
-  if (sampleTable.value.length === 0) return
-  
-  // 按优化后的TF分数排序（如果已优化），否则按原始TF分数排序
-  const sorted = [...sampleTable.value].map((item, idx) => ({ ...item, originalIdx: idx }))
-    .sort((a, b) => {
-      const scoreA = enableOptimization.value && a.optimized_tf !== undefined ? a.optimized_tf : a.tf
-      const scoreB = enableOptimization.value && b.optimized_tf !== undefined ? b.optimized_tf : b.tf
-      return scoreA - scoreB
-    })
-  
-  // 构建旧索引到新索引的映射
-  const oldToNewIndex = new Map<number, number>()
-  sorted.forEach((item, newIdx) => {
-    oldToNewIndex.set(item.originalIdx, newIdx)
-  })
-  
-  // 更新sampleSpectra的索引映射（先更新，因为后面要用）
-  const newSampleSpectra = new Map<number, { 
-    initial: { R: number[]; T: number[] } | null; 
-    optimized: { R: number[]; T: number[]; optimized_structure: string[] } | null 
-  }>()
-  sampleSpectra.value.forEach((spectrum, oldIdx) => {
-    const newIdx = oldToNewIndex.get(oldIdx)
-    if (newIdx !== undefined) {
-      newSampleSpectra.set(newIdx, spectrum)
-    }
-  })
-  sampleSpectra.value = newSampleSpectra
-  
-  // 更新sampleTable（最后更新，确保索引正确）
-  sampleTable.value = sorted.map((item, newIdx) => {
-    const { originalIdx, ...rest } = item
-    return { ...rest, idx: newIdx }
-  })
-  
-  // 找到新的最佳结果（排序后第一个就是最佳的）
-  const bestIndex = 0
-  const bestSample = sampleTable.value[bestIndex]
-  
-  // 更新bestOne
-  bestOne.value = {
-    source: bestSample.tag || `Sample#${String(bestIndex).padStart(2, '0')}`,
-    score: enableOptimization.value && bestSample.optimized_tf !== undefined 
-      ? bestSample.optimized_tf 
-      : bestSample.tf,
-    structure: enableOptimization.value && bestSample.optimized_structure 
-      ? bestSample.optimized_structure 
-      : bestSample.structure
-  }
-  
-  // 自动选中新的最佳结果
-  selectedSamples.value = [bestIndex]
-  
-  // 如果还没有计算光谱，则计算
-  if (!sampleSpectra.value.has(bestIndex)) {
-    const structure = enableOptimization.value && bestSample.optimized_structure 
-      ? bestSample.optimized_structure 
-      : bestSample.structure
-    await calculateSampleSpectrum(bestIndex, structure)
-  }
-  
-  // 最后才绘制图表
-  drawSpectrumChart()
-  updateLegend()
-}
 
 /* ---------- 解析 token -> 层表 ---------- */
 function parseTokens(tokens: string[]) { const rows: Array<{ material: string; thickness: number }> = []; for (const tok of tokens) { const s = String(tok); if (!s.includes('_')) continue; const [mat, raw] = s.split('_', 2); const num = (raw || '').replace(/[^0-9.]/g, ''); if (!num) continue; rows.push({ material: mat, thickness: Number(num) }) } return rows }
